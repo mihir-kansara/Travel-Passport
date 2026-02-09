@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Analyze",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "flutter analyze"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$dart-analyzer"
+      ]
+    },
+    {
+      "label": "Clean+Get+Analyze",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "flutter clean; flutter pub get; flutter analyze"
+      ],
+      "problemMatcher": [
+        "$dart-analyzer"
+      ]
+    }
+  ]
+}

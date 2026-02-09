@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "794333114909",
+    "project_id": "travel-passport-5cefb",
+    "storage_bucket": "travel-passport-5cefb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:794333114909:android:62a9b5596ca0acfe774cf4",
+        "android_client_info": {
+          "package_name": "com.travelpassport.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9bg_jVnuE-lA09AEb76rjayuRRYn9ugk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

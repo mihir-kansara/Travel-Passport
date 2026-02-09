@@ -1,0 +1,2343 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Travel Passport MVP (Social + Collaborative Planner)</title>
+
+  <!-- Tailwind (CDN) for quick MVP styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Lucide icons (CDN) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    /* Small polish */
+    :root { color-scheme: light; }
+    .no-scrollbar::-webkit-scrollbar { display:none; }
+    .no-scrollbar { -ms-overflow-style:none; scrollbar-width:none; }
+    .tap { transform: translateZ(0); }
+    .tap:active { transform: scale(0.99); }
+    .glass { background: rgba(255,255,255,0.75); backdrop-filter: blur(10px); }
+    .soft-shadow { box-shadow: 0 12px 30px rgba(2,6,23,0.10); }
+    .ring-soft { box-shadow: 0 0 0 1px rgba(15,23,42,0.08) inset; }
+    .grad-0{background:linear-gradient(135deg,#0ea5e9,#6366f1);}
+    .grad-1{background:linear-gradient(135deg,#22c55e,#14b8a6);}
+    .grad-2{background:linear-gradient(135deg,#f97316,#ef4444);}
+    .grad-3{background:linear-gradient(135deg,#a855f7,#ec4899);}
+    .grad-4{background:linear-gradient(135deg,#f59e0b,#84cc16);}
+    .img-fallback{background:linear-gradient(135deg,#e2e8f0,#cbd5e1);}
+    .pulse-dot{animation:pulse 1.6s ease-in-out infinite;}
+    @keyframes pulse{0%,100%{opacity:.35; transform: scale(.9);}50%{opacity:1; transform: scale(1);}}
+    .dragging{opacity:.55;}
+  </style>
+</head>
+
+<body class="min-h-screen bg-neutral-900 font-sans">
+  <div class="min-h-screen flex items-center justify-center p-6">
+    <!-- Phone frame -->
+    <div class="w-full max-w-md h-[860px] bg-white rounded-[34px] overflow-hidden soft-shadow relative border-8 border-neutral-800">
+      <!-- Status bar -->
+      <div class="h-6 w-full bg-white z-50 absolute top-0 flex justify-between px-6 items-center">
+        <span id="statusTime" class="text-[10px] font-bold text-slate-900">9:41</span>
+        <div class="flex space-x-1 opacity-70">
+          <div class="w-4 h-4 rounded-full bg-black/10"></div>
+          <div class="w-4 h-4 rounded-full bg-black/10"></div>
+        </div>
+      </div>
+
+      <div class="pt-6 h-full">
+        <div id="app" class="h-full"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* =========================
+   Travel Passport MVP v2
+   Social feed + Collaborative planner (Wanderlog-ish)
+   Single-file HTML/CSS/JS (no backend). Uses localStorage.
+   ========================= */
+
+const LS_KEY = "travelPassportMVP.v2";
+
+/* ---------- Helpers ---------- */
+const uid = () => Math.random().toString(36).slice(2, 10);
+const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+const nowHHMM = () => new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+const formatTimeAgo = (ts) => {
+  const diff = Math.max(0, Date.now() - ts);
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  const d = Math.floor(hrs / 24);
+  return `${d}d`;
+};
+const safe = (s="") => (""+s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const toISO = (d) => d ? new Date(d).toISOString().slice(0,10) : "";
+const parseISO = (s) => s ? new Date(s + "T00:00:00") : null;
+const daysBetween = (aISO, bISO) => {
+  const a = parseISO(aISO), b = parseISO(bISO);
+  if (!a || !b) return 0;
+  return Math.round((b - a) / (1000*60*60*24));
+};
+const dateLabel = (iso) => {
+  const d = parseISO(iso);
+  if (!d) return "";
+  return d.toLocaleDateString([], {weekday:"short", month:"short", day:"numeric"});
+};
+const pad2 = (n) => (n<10? "0"+n : ""+n);
+const cityKey = (destination) => (destination || "").trim().toLowerCase();
+const initials = (name="") => name.split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0].toUpperCase()).join("") || "?";
+
+/* ---------- Audience ---------- */
+const AUDIENCES = [
+  { key:"closest", name:"Closest", desc:"Only your closest circle can view." },
+  { key:"close", name:"Close Friends", desc:"Friends you trust." },
+  { key:"friends", name:"Friends", desc:"Your full friends list." },
+  { key:"fof", name:"Friends of Friends", desc:"Light discovery + join requests." },
+  { key:"public", name:"Public", desc:"Anyone can view + request to join." },
+];
+const audienceName = (k) => (AUDIENCES.find(a=>a.key===k)?.name || "Unknown");
+
+/* ---------- Seed data ---------- */
+const USERS = [
+  { id:"u_me", name:"Mihir", avatar:"M" },
+  { id:"u2", name:"Akshita", avatar:"A" },
+  { id:"u3", name:"Bhavesh", avatar:"B" },
+  { id:"u4", name:"Rohan", avatar:"R" },
+  { id:"u5", name:"Riya", avatar:"R" },
+  { id:"u6", name:"Sara", avatar:"S" },
+  { id:"u7", name:"Jay", avatar:"J" },
+  { id:"u8", name:"Nina", avatar:"N" },
+  { id:"u9", name:"Omar", avatar:"O" },
+  { id:"u10", name:"Priya", avatar:"P" },
+];
+
+const DEFAULT_ME_ID = "u_me";
+
+const seedTrips = () => ([
+  {
+    id:"t1",
+    destination:"Kyoto, Japan",
+    startDate: "2026-04-02",
+    endDate: "2026-04-10",
+    dates:"Apr 2 - Apr 10",
+    status:"upcoming",
+    cover: { kind:"gradient", idx:0, photoURL:"" },
+    audience:{ visibility:"close", allowJoinRequests:true, joinApproval:"owner" },
+    ownerId:DEFAULT_ME_ID,
+    share:{ linkCode:"k8s92", shareNote:"Drop flights + stays + anchor plans here. Keep it calm 🧘‍♂️" },
+    publish:{ isLive:true, isArchived:false, toWall:true }, // external social
+    participants:[
+      { id:"u_me", role:"owner" },
+      { id:"u2", role:"member" },
+      { id:"u3", role:"member" },
+    ],
+    joinRequests:[
+      { id:"jr1", userId:"u5", note:"I’ll be in Kyoto around then — would love to join a day trip!", status:"pending", createdAt: Date.now()-1000*60*40 },
+    ],
+    updates:[
+      { id:"up1", at:Date.now()-1000*60*80, actorId:"u_me", kind:"system", text:"Trip created. Invite your people and start planning." },
+      { id:"up2", at:Date.now()-1000*60*70, actorId:"u2", kind:"planner", text:"Added stay: The Mitsui (check-in 12:00 PM)." },
+    ],
+    planner:{
+      days: [], // auto-generated from dates, but persisted once created
+      savedPlaces:[
+        { id:"p1", name:"Kiyomizu-dera", area:"Higashiyama", tag:"Temple" },
+        { id:"p2", name:"Nishiki Market", area:"Downtown", tag:"Food" },
+      ]
+    },
+    chat:[
+      { id:"c1", authorId:"u2", text:"I can book the hotel — preference on neighborhood?", createdAt: Date.now()-1000*60*50 },
+      { id:"c2", authorId:"u_me", text:"Let’s optimize for walking + calm mornings. Higashiyama maybe.", createdAt: Date.now()-1000*60*45 },
+    ],
+    story:{
+      headline:"Calm Kyoto — temples, coffee, and slow mornings.",
+      highlights:[ "Sunrise at Fushimi Inari", "Wood-fired pizza at Monk", "Higashiyama walks" ],
+      photos:[
+        { id:"ph1", url:"https://images.unsplash.com/photo-1549693578-d683be217e58?auto=format&fit=crop&w=900&q=60", caption:"Fushimi vibes" },
+        { id:"ph2", url:"https://images.unsplash.com/photo-1526481280695-3c687fd5432c?auto=format&fit=crop&w=900&q=60", caption:"Kyoto streets" },
+      ],
+      moments:[
+        { id:"m1", at:Date.now()-1000*60*65, authorId:"u_me", type:"text", caption:"Landing soon. Drop your flight times 👇" },
+      ],
+      wallStats:{ likes: 24, comments: 6 },
+      wallComments:[
+        { id:"cm1", at:Date.now()-1000*60*62, authorId:"u6", text:"Kyoto is magic. Following 🔥" },
+        { id:"cm2", at:Date.now()-1000*60*55, authorId:"u10", text:"Add me for coffee if you can!" },
+      ],
+    }
+  },
+  {
+    id:"t2",
+    destination:"Tulum, Mexico",
+    startDate:"2026-01-15",
+    endDate:"2026-01-20",
+    dates:"Jan 15 - Jan 20",
+    status:"past",
+    cover:{ kind:"gradient", idx:2, photoURL:"" },
+    audience:{ visibility:"friends", allowJoinRequests:false, joinApproval:"owner" },
+    ownerId:DEFAULT_ME_ID,
+    share:{ linkCode:"tul11", shareNote:"" },
+    publish:{ isLive:false, isArchived:true, toWall:true },
+    participants:[ {id:"u_me", role:"owner"}, {id:"u4", role:"member"} ],
+    joinRequests:[],
+    updates:[
+      { id:"up3", at:Date.now()-1000*60*60*24*10, actorId:"u_me", kind:"system", text:"Trip archived. Share the recap with friends." },
+    ],
+    planner:{ days:[], savedPlaces:[] },
+    chat:[],
+    story:{
+      headline:"Beach days + tacos + no agenda.",
+      highlights:["Cenote swim","Sunset dinner","Beach club day"],
+      photos:[],
+      moments:[],
+      wallStats:{ likes: 81, comments: 14 },
+      wallComments:[],
+    }
+  }
+]);
+
+/* ---------- State ---------- */
+function loadState(){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  }catch(e){
+    return null;
+  }
+}
+function saveState(){
+  localStorage.setItem(LS_KEY, JSON.stringify(state));
+}
+
+let state = loadState() || {
+  screen: "home", // home | create | trip | storyView
+  homeTab: "wall", // wall | trips
+  tripTab: "planner", // planner | updates | story | people | chat
+  activeTripId: null,
+  activeDayId: null,
+  actorId: DEFAULT_ME_ID, // "Acting as" user (simulates collaboration)
+  modals: { share:false, addItem:false, addPlace:false, editItem:false, comments:false, tripPicker:false, addFriend:false, settings:false, addPhoto:false },
+  draft: {},
+  users: USERS,
+  trips: seedTrips(),
+};
+
+function getUser(id){ return state.users.find(u=>u.id===id) || {id, name:"Unknown", avatar:"?"}; }
+function tripById(id){ return state.trips.find(t=>t.id===id) || null; }
+function isOwner(trip){ return trip.ownerId === state.actorId; }
+function participantIds(trip){ return (trip.participants||[]).map(p=>p.id); }
+function isParticipant(trip, userId){ return participantIds(trip).includes(userId); }
+
+/* Ensure planner days exist */
+function ensureDays(trip){
+  if (trip.planner?.days?.length) return;
+  const start = trip.startDate || toISO(new Date());
+  const end = trip.endDate || start;
+  const n = clamp(daysBetween(start,end), 0, 21);
+  const days = [];
+  for (let i=0;i<=n;i++){
+    const d = parseISO(start);
+    d.setDate(d.getDate()+i);
+    const iso = toISO(d);
+    days.push({
+      id: uid(),
+      iso,
+      label: `Day ${i+1} · ${dateLabel(iso)}`,
+      items: []
+    });
+  }
+  trip.planner = trip.planner || {};
+  trip.planner.days = days;
+
+  // Seed a couple items for Kyoto
+  if (trip.id === "t1" && days.length){
+    days[0].items.push(
+      { id:uid(), type:"activity", time:"6:30 AM", title:"Fushimi Inari sunrise", location:"Fushimi Inari Taisha", notes:"Start early to avoid crowds.", assignedTo:"u_me", done:false, createdAt: Date.now()-1000*60*60 },
+      { id:uid(), type:"food", time:"9:30 AM", title:"Coffee", location:"% Arabica · Higashiyama", notes:"Find something minimal + calm.", assignedTo:"u2", done:false, createdAt: Date.now()-1000*60*55 },
+    );
+  }
+}
+
+/* Cover helpers */
+function coverClass(trip){
+  const idx = (trip.cover?.idx ?? 0) % 5;
+  return `grad-${idx}`;
+}
+function coverStyle(trip){
+  const url = (trip.cover?.photoURL || "").trim();
+  if (trip.cover?.kind === "photo" && url){
+    return `background-image:url('${url}'); background-size:cover; background-position:center;`;
+  }
+  return "";
+}
+function setCoverPhoto(tripId, url){
+  const t = tripById(tripId);
+  if (!t) return;
+  t.cover = t.cover || {kind:"gradient", idx:0, photoURL:""};
+  if ((url||"").trim()){
+    t.cover.kind = "photo";
+    t.cover.photoURL = url.trim();
+  }else{
+    t.cover.kind = "gradient";
+    t.cover.photoURL = "";
+  }
+  t.cover.idx = (t.cover.idx ?? 0);
+  addUpdate(tripId, "story", `Updated cover photo.`);
+  saveState(); render();
+}
+
+/* Updates (internal activity feed) */
+function addUpdate(tripId, kind, text){
+  const t = tripById(tripId);
+  if (!t) return;
+  t.updates = t.updates || [];
+  t.updates.push({ id:uid(), at:Date.now(), actorId: state.actorId, kind, text });
+}
+
+/* Wall: bump engagement a bit for dopamine (still MVP) */
+function bumpWallStats(tripId, deltaLikes=0){
+  const t = tripById(tripId);
+  if (!t) return;
+  t.story = t.story || {};
+  t.story.wallStats = t.story.wallStats || {likes:0, comments:0};
+  t.story.wallStats.likes = Math.max(0, (t.story.wallStats.likes||0) + deltaLikes);
+}
+
+/* ---------- Navigation ---------- */
+function goHome(){ state.screen="home"; state.activeTripId=null; state.activeDayId=null; saveState(); render(); }
+function openTrip(tripId){
+  const t = tripById(tripId);
+  if (!t) return;
+  ensureDays(t);
+  state.activeTripId = tripId;
+  state.screen = "trip";
+  state.tripTab = "planner";
+  state.activeDayId = t.planner.days[0]?.id || null;
+  saveState(); render();
+}
+function openStoryView(tripId){
+  state.screen="storyView";
+  state.activeTripId=tripId;
+  saveState(); render();
+}
+
+/* ---------- Create trip ---------- */
+function createTripFromDraft(){
+  const dest = (state.draft.destination||"").trim();
+  const start = state.draft.startDate || "";
+  const end = state.draft.endDate || "";
+  if (!dest || !start || !end) return;
+
+  const visibility = state.draft.visibility || "close";
+  const allowJoinRequests = !!state.draft.allowJoinRequests;
+
+  const s = parseISO(start), e = parseISO(end);
+  const dates = `${s.toLocaleDateString([], {month:"short", day:"numeric"})} - ${e.toLocaleDateString([], {month:"short", day:"numeric"})}`;
+
+  const newTrip = {
+    id: uid(),
+    destination: dest,
+    startDate: start,
+    endDate: end,
+    dates,
+    status: (parseISO(end) < new Date()) ? "past" : "upcoming",
+    cover: { kind:"gradient", idx: Math.floor(Math.random()*5), photoURL:"" },
+    audience:{ visibility, allowJoinRequests, joinApproval:"owner" },
+    ownerId: state.actorId,
+    share:{ linkCode: uid(), shareNote:"Drop essentials: flights, stays, anchor plans, and tasks." },
+    publish:{ isLive:true, isArchived:false, toWall:false },
+    participants:[ { id: state.actorId, role:"owner" } ],
+    joinRequests:[],
+    updates:[ { id:uid(), at:Date.now(), actorId: state.actorId, kind:"system", text:"Trip created. Start planning together." } ],
+    planner:{ days:[], savedPlaces:[] },
+    chat:[],
+    story:{ headline:`${dest} — live trip passport`, highlights:[], photos:[], moments:[], wallStats:{likes:0, comments:0}, wallComments:[] }
+  };
+
+  state.trips.unshift(newTrip);
+  state.draft = {};
+  saveState();
+  openTrip(newTrip.id);
+  // open share modal for onboarding
+  state.modals.share = true;
+  saveState(); render();
+}
+
+/* ---------- People / friends ---------- */
+function addFriendToTrip(tripId, userId){
+  const t = tripById(tripId);
+  if (!t) return;
+  if (t.participants.some(p=>p.id===userId)) return;
+  t.participants.push({id:userId, role:"member"});
+  addUpdate(tripId, "people", `${getUser(userId).name} added to trip.`);
+  saveState(); render();
+}
+function removeMember(tripId, userId){
+  const t = tripById(tripId);
+  if (!t) return;
+  if (userId === t.ownerId) return;
+  t.participants = t.participants.filter(p=>p.id!==userId);
+  addUpdate(tripId, "people", `${getUser(userId).name} removed from trip.`);
+  saveState(); render();
+}
+function simulateJoinRequest(tripId){
+  const t = tripById(tripId);
+  if (!t) return;
+  const candidates = ["u6","u7","u8","u9","u10"].filter(id => !t.joinRequests.some(r=>r.userId===id) && !t.participants.some(p=>p.id===id));
+  if (!candidates.length) return;
+  const pick = candidates[Math.floor(Math.random()*candidates.length)];
+  t.joinRequests.unshift({ id:uid(), userId: pick, note:"Can I join for a day?", status:"pending", createdAt: Date.now() });
+  addUpdate(tripId, "people", `${getUser(pick).name} requested to join.`);
+  saveState(); render();
+}
+function requestToJoinAsActor(tripId){
+  const t = tripById(tripId);
+  if (!t) return;
+  if (!t.audience.allowJoinRequests) return;
+  if (isParticipant(t, state.actorId)) return;
+  if (t.joinRequests.some(r=>r.userId===state.actorId && r.status==="pending")) return;
+  t.joinRequests.unshift({ id:uid(), userId: state.actorId, note:"Would love to overlap a day 👋", status:"pending", createdAt: Date.now() });
+  addUpdate(tripId, "people", `${getUser(state.actorId).name} requested to join.`);
+  saveState(); render();
+}
+function approveRequest(tripId, reqId){
+  const t = tripById(tripId);
+  if (!t) return;
+  const r = t.joinRequests.find(x=>x.id===reqId);
+  if (!r) return;
+  r.status = "approved";
+  if (!t.participants.some(p=>p.id===r.userId)) t.participants.push({id:r.userId, role:"member"});
+  addUpdate(tripId, "people", `${getUser(r.userId).name} joined the trip.`);
+  saveState(); render();
+}
+function declineRequest(tripId, reqId){
+  const t = tripById(tripId);
+  if (!t) return;
+  const r = t.joinRequests.find(x=>x.id===reqId);
+  if (!r) return;
+  r.status = "declined";
+  addUpdate(tripId, "people", `Declined join request from ${getUser(r.userId).name}.`);
+  saveState(); render();
+}
+
+/* ---------- Planner: add/edit/reorder ---------- */
+function addPlannerItem(tripId, dayId, item){
+  const t = tripById(tripId); if (!t) return;
+  ensureDays(t);
+  const day = t.planner.days.find(d=>d.id===dayId); if (!day) return;
+  day.items.push({
+    id: uid(),
+    type: item.type || "activity",
+    time: item.time || "",
+    title: item.title || "",
+    location: item.location || "",
+    notes: item.notes || "",
+    assignedTo: item.assignedTo || state.actorId,
+    done: false,
+    createdAt: Date.now(),
+  });
+  addUpdate(tripId, "planner", `Added “${item.title}” to ${day.label}.`);
+  saveState(); render();
+}
+function toggleDone(tripId, dayId, itemId){
+  const t = tripById(tripId); if (!t) return;
+  const day = t.planner.days.find(d=>d.id===dayId); if (!day) return;
+  const it = day.items.find(i=>i.id===itemId); if (!it) return;
+  it.done = !it.done;
+  addUpdate(tripId, "planner", `${it.done ? "Completed" : "Re-opened"} “${it.title}”.`);
+  saveState(); render();
+}
+function deleteItem(tripId, dayId, itemId){
+  const t = tripById(tripId); if (!t) return;
+  const day = t.planner.days.find(d=>d.id===dayId); if (!day) return;
+  const it = day.items.find(i=>i.id===itemId);
+  day.items = day.items.filter(i=>i.id!==itemId);
+  addUpdate(tripId, "planner", `Removed “${it?.title || "item"}”.`);
+  saveState(); render();
+}
+function openEditItem(tripId, dayId, itemId){
+  const t = tripById(tripId); if (!t) return;
+  const day = t.planner.days.find(d=>d.id===dayId); if (!day) return;
+  const it = day.items.find(i=>i.id===itemId); if (!it) return;
+  state.draft = { editTripId: tripId, editDayId: dayId, editItemId: itemId, ...it };
+  state.modals.editItem = true;
+  saveState(); render();
+}
+function saveEditItem(){
+  const { editTripId, editDayId, editItemId } = state.draft || {};
+  const t = tripById(editTripId); if (!t) return;
+  const day = t.planner.days.find(d=>d.id===editDayId); if (!day) return;
+  const it = day.items.find(i=>i.id===editItemId); if (!it) return;
+
+  it.type = state.draft.type || it.type;
+  it.time = (state.draft.time||"").trim();
+  it.title = (state.draft.title||"").trim();
+  it.location = (state.draft.location||"").trim();
+  it.notes = (state.draft.notes||"").trim();
+  it.assignedTo = state.draft.assignedTo || it.assignedTo;
+
+  addUpdate(editTripId, "planner", `Updated “${it.title}”.`);
+  state.modals.editItem = false;
+  state.draft = {};
+  saveState(); render();
+}
+
+/* Drag reorder */
+let dragCtx = null;
+function onDragStart(e){
+  const el = e.target.closest("[data-draggable-item]");
+  if (!el) return;
+  dragCtx = { tripId: el.dataset.tripId, dayId: el.dataset.dayId, itemId: el.dataset.itemId };
+  el.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+}
+function onDragEnd(e){
+  const el = e.target.closest("[data-draggable-item]");
+  if (el) el.classList.remove("dragging");
+  dragCtx = null;
+}
+function onDragOver(e){
+  const over = e.target.closest("[data-drop-target]");
+  if (!over) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+}
+function onDrop(e){
+  const over = e.target.closest("[data-drop-target]");
+  if (!over || !dragCtx) return;
+  e.preventDefault();
+  const { tripId, dayId, itemId } = dragCtx;
+  const targetId = over.dataset.targetItemId;
+  if (itemId === targetId) return;
+
+  const t = tripById(tripId); if (!t) return;
+  const day = t.planner.days.find(d=>d.id===dayId); if (!day) return;
+  const items = day.items.slice();
+  const from = items.findIndex(i=>i.id===itemId);
+  const to = items.findIndex(i=>i.id===targetId);
+  if (from<0 || to<0) return;
+  const [moved] = items.splice(from,1);
+  items.splice(to,0,moved);
+  day.items = items;
+  addUpdate(tripId, "planner", `Reordered items in ${day.label}.`);
+  saveState(); render();
+}
+
+/* Saved places */
+function addSavedPlace(tripId, place){
+  const t = tripById(tripId); if (!t) return;
+  t.planner.savedPlaces = t.planner.savedPlaces || [];
+  t.planner.savedPlaces.unshift({ id:uid(), name:place.name||"", area:place.area||"", tag:place.tag||"" });
+  addUpdate(tripId, "planner", `Saved place: ${place.name}.`);
+  saveState(); render();
+}
+function quickAddPlaceToDay(tripId, dayId, placeId){
+  const t = tripById(tripId); if (!t) return;
+  const day = t.planner.days.find(d=>d.id===dayId); if (!day) return;
+  const p = (t.planner.savedPlaces||[]).find(x=>x.id===placeId);
+  if (!p) return;
+  addPlannerItem(tripId, dayId, {
+    type:"activity",
+    time:"",
+    title:p.name,
+    location: [p.area, p.tag].filter(Boolean).join(" · "),
+    notes: p.tag ? `Saved place · ${p.tag}` : "Saved place",
+    assignedTo: state.actorId
+  });
+}
+
+/* ---------- Story / social ---------- */
+function togglePublishToWall(tripId, on){
+  const t = tripById(tripId); if (!t) return;
+  t.publish = t.publish || {toWall:false};
+  t.publish.toWall = !!on;
+  addUpdate(tripId, "story", t.publish.toWall ? "Published trip to your Wall." : "Unpublished from Wall.");
+  saveState(); render();
+}
+function addStoryMoment(tripId, moment){
+  const t = tripById(tripId); if (!t) return;
+  t.story = t.story || { moments:[], photos:[], highlights:[] };
+  t.story.moments = t.story.moments || [];
+  t.story.moments.unshift({
+    id: uid(),
+    at: Date.now(),
+    authorId: state.actorId,
+    type: moment.type || "text",
+    caption: moment.caption || "",
+    url: moment.url || ""
+  });
+  addUpdate(tripId, "story", "Posted an update to the trip story.");
+  saveState(); render();
+}
+function addStoryPhoto(tripId, url, caption){
+  const t = tripById(tripId); if (!t) return;
+  t.story = t.story || {};
+  t.story.photos = t.story.photos || [];
+  if (!url.trim()) return;
+  t.story.photos.unshift({ id:uid(), url:url.trim(), caption:(caption||"").trim() });
+  addUpdate(tripId, "story", "Added a photo to the trip story.");
+  saveState(); render();
+}
+function addWallComment(tripId, text){
+  const t = tripById(tripId); if (!t) return;
+  t.story = t.story || {};
+  t.story.wallComments = t.story.wallComments || [];
+  const msg = (text||"").trim();
+  if (!msg) return;
+  t.story.wallComments.push({ id:uid(), at:Date.now(), authorId: state.actorId, text: msg });
+  t.story.wallStats = t.story.wallStats || {likes:0, comments:0};
+  t.story.wallStats.comments = (t.story.wallStats.comments||0) + 1;
+  saveState(); render();
+}
+
+/* ---------- Chat ---------- */
+function sendChat(tripId, text){
+  const t = tripById(tripId); if (!t) return;
+  if (!text.trim()) return;
+  t.chat = t.chat || [];
+  t.chat.push({ id:uid(), authorId: state.actorId, text: text.trim(), createdAt: Date.now() });
+  addUpdate(tripId, "chat", "Sent a message in chat.");
+  saveState(); render();
+}
+
+/* ---------- Share ---------- */
+async function copyToClipboard(text){
+  try{
+    await navigator.clipboard.writeText(text);
+    toast("Copied!");
+  }catch(e){
+    toast("Copy failed");
+  }
+}
+
+/* ---------- Toast ---------- */
+let toastTimer = null;
+function toast(msg){
+  const el = document.getElementById("toast");
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("opacity-0", "translate-y-2");
+  el.classList.add("opacity-100");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{
+    el.classList.add("opacity-0", "translate-y-2");
+    el.classList.remove("opacity-100");
+  }, 1400);
+}
+
+/* =========================
+   UI Templates (render)
+   ========================= */
+
+function AppShell(inner){
+  return `
+    <div class="h-full relative">
+      ${TopBar()}
+      <div class="h-[calc(100%-52px)]">${inner}</div>
+      ${Toast()}
+    </div>
+  `;
+}
+
+function TopBar(){
+  const actor = getUser(state.actorId);
+  return `
+    <div class="h-[52px] px-4 flex items-center justify-between bg-white border-b border-slate-100">
+      <div class="flex items-center gap-2">
+        <div class="w-9 h-9 rounded-full bg-slate-200 text-slate-800 font-bold flex items-center justify-center ring-soft">${safe(actor.avatar)}</div>
+        <div>
+          <div class="text-xs text-slate-400 font-bold uppercase tracking-wider">Acting as</div>
+          <select data-action="setActor" class="text-sm font-semibold text-slate-900 bg-transparent outline-none -ml-1">
+            ${state.users.map(u=>`<option value="${u.id}" ${u.id===state.actorId?"selected":""}>${safe(u.name)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button data-action="resetApp" class="px-3 py-2 text-xs font-bold rounded-xl bg-slate-100 text-slate-700 tap">Reset</button>
+      </div>
+    </div>
+  `;
+}
+
+function Toast(){
+  return `
+    <div id="toast" class="absolute left-1/2 -translate-x-1/2 bottom-6 px-4 py-2 rounded-full bg-slate-900 text-white text-xs font-bold opacity-0 translate-y-2 transition-all">Copied!</div>
+  `;
+}
+
+/* ---------- Home ---------- */
+function HomeScreen(){
+  const wall = renderWall();
+  const trips = renderTripsHome();
+
+  return `
+    <div class="h-full bg-slate-50 flex flex-col">
+      <div class="px-6 pt-8 pb-4 bg-white border-b border-slate-100">
+        <div class="flex items-start justify-between">
+          <div>
+            <div class="text-2xl font-extrabold text-slate-900 tracking-tight">Travel Passport</div>
+            <div class="text-sm text-slate-500 mt-1">Plan together. Share like a story.</div>
+          </div>
+          <button data-action="goCreate" class="h-11 w-11 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-200 tap" aria-label="Create trip">
+            <i data-lucide="plus" class="w-5 h-5"></i>
+          </button>
+        </div>
+
+        ${StoriesRow()}
+
+        <div class="mt-4 bg-slate-100 rounded-2xl p-1 flex">
+          <button data-action="setHomeTab" data-tab="wall" class="flex-1 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider ${state.homeTab==="wall"?"bg-white text-slate-900 shadow-sm":"text-slate-500"}">Wall</button>
+          <button data-action="setHomeTab" data-tab="trips" class="flex-1 py-2 rounded-xl text-xs font-extrabold uppercase tracking-wider ${state.homeTab==="trips"?"bg-white text-slate-900 shadow-sm":"text-slate-500"}">Your Trips</button>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto no-scrollbar">
+        ${state.homeTab==="wall" ? wall : trips}
+      </div>
+    </div>
+  `;
+}
+
+function StoriesRow(){
+  // Group by destination to avoid "5 Dubais" problem.
+  const liveTrips = state.trips.filter(t => t.publish?.isLive && t.status==="upcoming");
+  const groups = {};
+  for (const t of liveTrips){
+    const k = cityKey(t.destination);
+    groups[k] = groups[k] || { destination: t.destination, trips:[] };
+    groups[k].trips.push(t);
+  }
+  const tiles = Object.values(groups).slice(0, 12);
+
+  if (!tiles.length){
+    return `
+      <div class="mt-5 p-4 rounded-2xl bg-slate-50 border border-slate-200">
+        <div class="text-xs font-bold text-slate-500 uppercase tracking-wider">Stories</div>
+        <div class="mt-2 text-sm text-slate-400">No live trip stories yet. Create a trip and publish updates.</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="mt-5">
+      <div class="flex items-center justify-between">
+        <div class="text-xs font-bold text-slate-400 uppercase tracking-wider">Stories</div>
+        <div class="text-xs text-slate-400">Grouped by city</div>
+      </div>
+      <div class="mt-3 flex gap-3 overflow-x-auto no-scrollbar pb-2">
+        ${tiles.map(g => StoryTile(g)).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function StoryTile(group){
+  const trips = group.trips;
+  const main = trips[0];
+  const avatars = trips.slice(0,3).map(t => getUser(t.ownerId).avatar);
+  const more = trips.length - avatars.length;
+  return `
+    <button data-action="openTripPicker" data-destination="${safe(group.destination)}"
+      class="w-[130px] shrink-0 rounded-2xl overflow-hidden ring-soft bg-white tap text-left">
+      <div class="h-20 ${coverClass(main)} relative" style="${coverStyle(main)}">
+        <div class="absolute inset-0 bg-black/15"></div>
+        <div class="absolute left-3 top-3 flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot"></span>
+          <span class="text-[10px] font-extrabold text-white uppercase tracking-widest">Live</span>
+        </div>
+        <div class="absolute bottom-2 left-2 flex -space-x-2">
+          ${avatars.map(a => `<div class="w-7 h-7 rounded-full bg-white/90 flex items-center justify-center text-xs font-extrabold text-slate-800 ring-2 ring-white">${safe(a)}</div>`).join("")}
+          ${more>0 ? `<div class="w-7 h-7 rounded-full bg-white/75 flex items-center justify-center text-[10px] font-extrabold text-slate-800 ring-2 ring-white">+${more}</div>` : ""}
+        </div>
+      </div>
+      <div class="p-3">
+        <div class="text-sm font-extrabold text-slate-900 leading-tight">${safe(group.destination)}</div>
+        <div class="text-xs text-slate-500 mt-1">${trips.length} trip${trips.length>1?"s":""}</div>
+      </div>
+    </button>
+  `;
+}
+
+function renderTripsHome(){
+  const mine = state.trips.filter(t => t.ownerId===state.actorId || isParticipant(t, state.actorId));
+  const upcoming = mine.filter(t => t.status==="upcoming");
+  const past = mine.filter(t => t.status==="past");
+
+  return `
+    <div class="p-6 space-y-8">
+      <section>
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Active & Upcoming</div>
+          <div class="inline-flex items-center px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 mr-2 pulse-dot"></span> Live Passports
+          </div>
+        </div>
+
+        <div class="space-y-4">
+          ${upcoming.length ? upcoming.map(tripCard).join("") : `<div class="text-sm text-slate-400 italic">No upcoming trips.</div>`}
+        </div>
+      </section>
+
+      <section>
+        <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider mb-3">Memory Lane</div>
+        <div class="space-y-4">
+          ${past.length ? past.map(tripCardPast).join("") : `<div class="text-sm text-slate-400 italic">No archived trips.</div>`}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function participantsAvatars(trip, limit=4){
+  const ids = trip.participants.map(p=>p.id);
+  const show = ids.slice(0,limit);
+  const rem = ids.length - show.length;
+  return `
+    <div class="flex -space-x-2">
+      ${show.map(id => {
+        const u = getUser(id);
+        return `<div class="w-8 h-8 rounded-full ring-2 ring-white bg-slate-200 flex items-center justify-center text-xs font-extrabold text-slate-700" title="${safe(u.name)}">${safe(u.avatar)}</div>`;
+      }).join("")}
+      ${rem>0 ? `<div class="w-8 h-8 rounded-full ring-2 ring-white bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-600">+${rem}</div>`:""}
+    </div>
+  `;
+}
+
+function tripCard(t){
+  const pending = (t.joinRequests||[]).some(r=>r.status==="pending");
+  return `
+    <button data-action="openTrip" data-trip="${t.id}"
+      class="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden tap">
+      <div class="h-24 ${coverClass(t)} relative" style="${coverStyle(t)}">
+        <div class="absolute inset-0 bg-black/10"></div>
+        <div class="absolute left-4 top-4">
+          <div class="text-white text-[10px] font-extrabold uppercase tracking-widest">${t.status==="upcoming" ? "Live planning" : "Archived"}</div>
+          <div class="text-white text-lg font-extrabold mt-1">${safe(t.destination)}</div>
+        </div>
+      </div>
+
+      <div class="p-5">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="flex items-center gap-2 text-sm text-slate-500 font-semibold">
+              <i data-lucide="calendar" class="w-4 h-4"></i>
+              ${safe(t.dates)}
+            </div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700">
+                <i data-lucide="users" class="w-4 h-4 mr-1.5"></i>${t.participants.length} travelers
+              </span>
+              <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-700">
+                <i data-lucide="shield" class="w-4 h-4 mr-1.5"></i>${safe(audienceName(t.audience.visibility))}
+              </span>
+              ${pending ? `
+                <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800">
+                  <i data-lucide="user-plus" class="w-4 h-4 mr-1.5"></i>Join requests
+                </span>` : ""
+              }
+            </div>
+          </div>
+          ${participantsAvatars(t, 3)}
+        </div>
+
+        <div class="mt-4 flex items-center justify-between">
+          <div class="text-xs text-slate-400 font-bold uppercase tracking-wider">Open passport</div>
+          <div class="text-xs font-bold text-indigo-600">Plan →</div>
+        </div>
+      </div>
+    </button>
+  `;
+}
+
+function tripCardPast(t){
+  return `
+    <button data-action="openTrip" data-trip="${t.id}"
+      class="w-full text-left bg-slate-100 rounded-2xl border border-slate-200 overflow-hidden tap">
+      <div class="p-5 flex items-center justify-between">
+        <div>
+          <div class="text-sm font-extrabold text-slate-800">${safe(t.destination)}</div>
+          <div class="text-xs text-slate-500 mt-1">${safe(t.dates)}</div>
+        </div>
+        <span class="px-3 py-1 rounded-full bg-white text-slate-700 text-xs font-bold">View only</span>
+      </div>
+    </button>
+  `;
+}
+
+/* ---------- Wall (social feed) ---------- */
+function renderWall(){
+  const published = state.trips
+    .filter(t => t.publish?.toWall)
+    .sort((a,b)=>{
+      const aT = (a.story?.moments?.[0]?.at) || (a.updates?.[a.updates.length-1]?.at) || 0;
+      const bT = (b.story?.moments?.[0]?.at) || (b.updates?.[b.updates.length-1]?.at) || 0;
+      return bT - aT;
+    });
+
+  if (!published.length){
+    return `
+      <div class="p-6">
+        <div class="p-5 rounded-2xl bg-white border border-slate-100">
+          <div class="text-sm font-extrabold text-slate-900">Your Wall is quiet.</div>
+          <div class="text-sm text-slate-500 mt-1">Publish a trip story to make it show up here.</div>
+          <button data-action="goCreate" class="mt-4 w-full py-3 rounded-2xl bg-indigo-600 text-white font-extrabold tap">
+            Create a trip
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="p-6 space-y-5">
+      ${published.map(wallCard).join("")}
+    </div>
+  `;
+}
+
+function wallCard(t){
+  const owner = getUser(t.ownerId);
+  const stats = t.story?.wallStats || {likes:0, comments:0};
+  const headline = t.story?.headline || `${t.destination} trip`;
+  const canRequest = t.audience?.allowJoinRequests && !isParticipant(t, state.actorId) && t.ownerId !== state.actorId;
+  const alreadyPending = (t.joinRequests||[]).some(r=>r.userId===state.actorId && r.status==="pending");
+
+  return `
+    <div class="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+      <button data-action="openStoryView" data-trip="${t.id}" class="w-full text-left tap">
+        <div class="h-40 ${coverClass(t)} relative" style="${coverStyle(t)}">
+          <img src="${safe(t.cover?.photoURL||"")}" alt="" class="hidden"/>
+          <div class="absolute inset-0 bg-black/20"></div>
+          <div class="absolute left-5 bottom-4 right-5">
+            <div class="flex items-center justify-between">
+              <div class="text-white text-sm font-extrabold">${safe(t.destination)}</div>
+              <div class="inline-flex items-center gap-2 text-white/90 text-xs font-bold">
+                <span class="w-2 h-2 rounded-full ${t.status==="upcoming"?"bg-emerald-400":"bg-white/70"} ${t.status==="upcoming"?"pulse-dot":""}"></span>
+                ${t.status==="upcoming" ? "Live" : "Recap"}
+              </div>
+            </div>
+            <div class="mt-1 text-white/90 text-xs font-semibold">${safe(t.dates)}</div>
+          </div>
+        </div>
+      </button>
+
+      <div class="p-5">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(owner.avatar)}</div>
+            <div>
+              <div class="text-sm font-extrabold text-slate-900">${safe(owner.name)}</div>
+              <div class="text-xs text-slate-500">published a trip passport</div>
+            </div>
+          </div>
+          <button data-action="openTrip" data-trip="${t.id}" class="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-extrabold tap">Open</button>
+        </div>
+
+        <div class="mt-4 text-slate-900 font-extrabold">${safe(headline)}</div>
+        <div class="mt-2 text-sm text-slate-500">
+          ${safe((t.story?.highlights||[]).slice(0,3).join(" · ") || "Tap to view the trip story.")}
+        </div>
+
+        <div class="mt-4 flex items-center justify-between">
+          <div class="flex items-center gap-4 text-slate-500 text-xs font-bold">
+            <span class="inline-flex items-center gap-1"><i data-lucide="heart" class="w-4 h-4"></i>${stats.likes}</span>
+            <span class="inline-flex items-center gap-1"><i data-lucide="message-circle" class="w-4 h-4"></i>${stats.comments}</span>
+          </div>
+          ${participantsAvatars(t, 4)}
+        </div>
+
+        <div class="mt-4 flex gap-2">
+          <button data-action="likeTrip" data-trip="${t.id}" class="flex-1 py-3 rounded-2xl bg-slate-100 text-slate-800 font-extrabold tap inline-flex items-center justify-center gap-2">
+            <i data-lucide="heart" class="w-4 h-4"></i> Like
+          </button>
+          <button data-action="openComments" data-trip="${t.id}" class="flex-1 py-3 rounded-2xl bg-slate-100 text-slate-800 font-extrabold tap inline-flex items-center justify-center gap-2">
+            <i data-lucide="message-circle" class="w-4 h-4"></i> Comment
+          </button>
+          ${canRequest ? `
+            <button data-action="requestJoin" data-trip="${t.id}" class="py-3 px-3 rounded-2xl bg-indigo-600 text-white font-extrabold tap" title="Request to join">
+              <i data-lucide="user-plus" class="w-4 h-4"></i>
+            </button>
+          ` : (alreadyPending ? `
+            <div class="py-3 px-3 rounded-2xl bg-amber-50 text-amber-800 font-extrabold text-xs inline-flex items-center gap-1">
+              <i data-lucide="clock" class="w-4 h-4"></i> Pending
+            </div>
+          ` : ``)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- Create screen ---------- */
+function CreateScreen(){
+  const d = state.draft || {};
+  return `
+    <div class="h-full bg-white flex flex-col">
+      <div class="px-6 pt-8 pb-4">
+        <button data-action="goHome" class="text-slate-500 tap" aria-label="back">
+          <i data-lucide="arrow-left" class="w-6 h-6"></i>
+        </button>
+        <div class="mt-4 text-3xl font-extrabold text-slate-900">Start a Passport</div>
+        <div class="text-slate-500 mt-2">Create a trip you can plan together + share socially.</div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto no-scrollbar px-6 pb-10">
+        <div class="space-y-6">
+          <div>
+            <div class="text-xs font-extrabold text-slate-900 uppercase tracking-wide">Destination</div>
+            <div class="mt-2 flex items-center gap-3 border-b-2 border-slate-100 py-2 focus-within:border-indigo-600 transition-colors">
+              <i data-lucide="map-pin" class="w-5 h-5 text-slate-400"></i>
+              <input data-bind="destination" value="${safe(d.destination||"")}" placeholder="e.g. Dubai, UAE"
+                class="flex-1 bg-transparent outline-none text-lg font-semibold text-slate-900 placeholder-slate-300"/>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <div class="text-xs font-extrabold text-slate-900 uppercase tracking-wide">Start</div>
+              <input type="date" data-bind="startDate" value="${safe(d.startDate||"")}"
+                class="mt-2 w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"/>
+            </div>
+            <div>
+              <div class="text-xs font-extrabold text-slate-900 uppercase tracking-wide">End</div>
+              <input type="date" data-bind="endDate" value="${safe(d.endDate||"")}"
+                class="mt-2 w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"/>
+            </div>
+          </div>
+
+          <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="text-xs font-extrabold text-slate-900 uppercase tracking-wide">Visibility</div>
+                <div class="text-sm text-slate-500 mt-1">${safe(AUDIENCES.find(a=>a.key==(d.visibility||"close"))?.desc || "")}</div>
+              </div>
+              <span class="px-3 py-1 rounded-full bg-white text-slate-700 text-xs font-extrabold ring-soft">${safe(audienceName(d.visibility||"close"))}</span>
+            </div>
+            <select data-bind="visibility" class="mt-3 w-full border border-slate-200 rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-semibold">
+              ${AUDIENCES.map(a=>`<option value="${a.key}" ${a.key===(d.visibility||"close")?"selected":""}>${safe(a.name)}</option>`).join("")}
+            </select>
+          </div>
+
+          <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-start justify-between gap-4">
+            <div>
+              <div class="font-extrabold text-slate-900">Allow join requests</div>
+              <div class="text-sm text-slate-500 mt-1">Let people request to join if visibility allows.</div>
+            </div>
+            <label class="inline-flex items-center cursor-pointer select-none">
+              <input type="checkbox" data-bind="allowJoinRequests" ${d.allowJoinRequests!==false ? "checked":""} class="sr-only"/>
+              <span class="w-14 h-9 rounded-full ${d.allowJoinRequests!==false ? "bg-indigo-600":"bg-slate-300"} p-1 transition-colors">
+                <span class="block w-7 h-7 rounded-full bg-white shadow-sm transition-transform ${d.allowJoinRequests!==false ? "translate-x-5":""}"></span>
+              </span>
+            </label>
+          </div>
+
+          <button data-action="createTrip" class="w-full py-4 rounded-2xl font-extrabold text-white bg-slate-900 tap"
+            ${(!(d.destination&&d.startDate&&d.endDate)) ? 'disabled style="opacity:.45; cursor:not-allowed"' : ""}>
+            Initialize Trip
+          </button>
+
+          <div class="text-xs text-slate-400">
+            MVP note: this is a single-file demo with localStorage — no backend.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- Trip screen ---------- */
+function TripScreen(){
+  const trip = tripById(state.activeTripId);
+  if (!trip) return `<div class="p-6">Trip not found. <button data-action="goHome" class="underline">Go home</button></div>`;
+  ensureDays(trip);
+
+  const owner = getUser(trip.ownerId);
+  const pendingCount = (trip.joinRequests||[]).filter(r=>r.status==="pending").length;
+
+  const day = trip.planner.days.find(d=>d.id===state.activeDayId) || trip.planner.days[0];
+  state.activeDayId = day?.id || null;
+
+  const readOnly = (trip.status==="past") && !isOwner(trip); // Past trips read-only for non-owner in demo
+  const member = isParticipant(trip, state.actorId);
+
+  return `
+    <div class="h-full bg-white flex flex-col relative">
+      <!-- Header -->
+      <div class="px-6 pt-8 pb-4 border-b border-slate-100 bg-white">
+        <div class="flex items-start justify-between">
+          <button data-action="goHome" class="text-slate-500 tap" aria-label="back">
+            <i data-lucide="arrow-left" class="w-6 h-6"></i>
+          </button>
+          <div class="flex items-center gap-2">
+            <button data-action="openShare" class="p-2 rounded-full bg-indigo-50 text-indigo-700 tap" aria-label="share">
+              <i data-lucide="share-2" class="w-5 h-5"></i>
+            </button>
+            <button data-action="openSettings" class="p-2 rounded-full bg-slate-100 text-slate-700 tap" aria-label="settings">
+              <i data-lucide="settings" class="w-5 h-5"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <div class="text-2xl font-extrabold text-slate-900">${safe(trip.destination)}</div>
+          <div class="mt-1 text-sm font-semibold text-slate-500">${safe(trip.dates)}</div>
+
+          <div class="mt-4 flex items-center gap-2 flex-wrap">
+            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold ${trip.status==="past"?"bg-slate-100 text-slate-700":"bg-emerald-50 text-emerald-700"}">
+              ${trip.status==="past" ? "Archived" : "Live"}
+            </span>
+            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold bg-slate-100 text-slate-700">
+              <i data-lucide="shield" class="w-4 h-4 mr-1.5"></i>${safe(audienceName(trip.audience.visibility))}
+            </span>
+            ${trip.audience.allowJoinRequests ? `
+              <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold ${pendingCount? "bg-amber-50 text-amber-800":"bg-slate-100 text-slate-700"}">
+                <i data-lucide="user-plus" class="w-4 h-4 mr-1.5"></i>${pendingCount ? `${pendingCount} pending` : "Join requests"}
+              </span>
+            ` : ""}
+            <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold bg-indigo-50 text-indigo-700">
+              <i data-lucide="globe" class="w-4 h-4 mr-1.5"></i>${trip.publish?.toWall ? "On Wall" : "Off Wall"}
+            </span>
+          </div>
+
+          <div class="mt-4 flex items-center justify-between">
+            <div class="flex items-center gap-2 text-xs text-slate-500 font-bold">
+              <span class="text-slate-400">Owner:</span> ${safe(owner.name)}
+            </div>
+            ${participantsAvatars(trip, 5)}
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="bg-white border-b border-slate-100">
+        <div class="flex">
+          ${TripTabBtn("planner","Planner","layout-list")}
+          ${TripTabBtn("updates","Updates","clock")}
+          ${TripTabBtn("story","Story","sparkles")}
+          ${TripTabBtn("people","People","users")}
+          ${TripTabBtn("chat","Chat","message-circle")}
+        </div>
+      </div>
+
+      <!-- Content -->
+      <div class="flex-1 overflow-hidden">
+        ${state.tripTab==="planner" ? PlannerTab(trip, day, readOnly, member) : ""}
+        ${state.tripTab==="updates" ? UpdatesTab(trip) : ""}
+        ${state.tripTab==="story" ? StoryTab(trip) : ""}
+        ${state.tripTab==="people" ? PeopleTab(trip, readOnly) : ""}
+        ${state.tripTab==="chat" ? ChatTab(trip, readOnly, member) : ""}
+      </div>
+
+      ${(!member && trip.status!=="past") ? `
+        <div class="absolute bottom-0 left-0 right-0 bg-indigo-600 text-white text-center py-3 text-xs font-extrabold">
+          You’re a viewer. Request to join to collaborate.
+        </div>
+      ` : ""}
+
+      ${Modals(trip)}
+    </div>
+  `;
+}
+
+function TripTabBtn(key, label, icon){
+  const active = state.tripTab===key;
+  return `
+    <button data-action="setTripTab" data-tab="${key}"
+      class="flex-1 py-3 text-xs font-extrabold uppercase tracking-wider flex items-center justify-center gap-2 ${active?"text-slate-900":"text-slate-400"} tap">
+      <i data-lucide="${icon}" class="w-4 h-4 ${active?"text-indigo-600":"text-slate-400"}"></i>
+      <span>${safe(label)}</span>
+    </button>
+  `;
+}
+
+/* ---------- Planner Tab (collab itinerary) ---------- */
+function PlannerTab(trip, day, readOnly, member){
+  const items = (day?.items || []).slice().sort((a,b)=> (a.time||"").localeCompare(b.time||""));
+  const savedPlaces = trip.planner.savedPlaces || [];
+
+  const percentDone = (()=>{
+    const all = trip.planner.days.flatMap(d=>d.items);
+    if (!all.length) return 0;
+    const done = all.filter(i=>i.done).length;
+    return Math.round((done/all.length)*100);
+  })();
+
+  return `
+    <div class="h-full flex flex-col bg-white">
+      <div class="p-6 bg-slate-50 border-b border-slate-100">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Collaborative planner</div>
+            <div class="text-lg font-extrabold text-slate-900 mt-1">Build the itinerary together</div>
+          </div>
+          <div class="px-3 py-1 rounded-full bg-white text-slate-700 text-xs font-extrabold ring-soft">${percentDone}% done</div>
+        </div>
+
+        <div class="mt-4 flex gap-2 overflow-x-auto no-scrollbar pb-1">
+          ${trip.planner.days.map(d=>`
+            <button data-action="setDay" data-day="${d.id}"
+              class="px-4 py-2 rounded-full text-sm font-extrabold whitespace-nowrap ${d.id===day.id ? "bg-slate-900 text-white":"bg-white text-slate-700 border border-slate-200"} tap">
+              ${safe(d.label)}
+            </button>
+          `).join("")}
+        </div>
+
+        <div class="mt-4 grid grid-cols-3 gap-2">
+          <div class="col-span-2 p-3 rounded-2xl bg-white ring-soft">
+            <div class="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Quick add</div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              ${["flight","stay","food","activity"].map(k=>`
+                <button data-action="openAddItem" data-type="${k}" class="px-3 py-2 rounded-xl text-xs font-extrabold bg-slate-100 text-slate-800 tap">${k}</button>
+              `).join("")}
+            </div>
+          </div>
+          <div class="p-3 rounded-2xl bg-white ring-soft">
+            <div class="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Places</div>
+            <button data-action="openAddPlace" class="mt-2 w-full py-2 rounded-xl bg-indigo-600 text-white text-xs font-extrabold tap">Save place</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto no-scrollbar p-6 bg-white" ondragover="onDragOver(event)" ondrop="onDrop(event)">
+        <!-- Day header -->
+        <div class="flex items-center justify-between">
+          <div class="text-sm font-extrabold text-slate-900">${safe(day.label)}</div>
+          <div class="text-xs text-slate-500 font-bold">${items.length} item${items.length!==1?"s":""}</div>
+        </div>
+
+        <!-- Items list -->
+        <div class="mt-4 space-y-3">
+          ${items.length ? items.map(it => plannerItemCard(trip, day, it, readOnly, member)).join("") : `
+            <div class="p-5 rounded-2xl bg-slate-50 border border-slate-200 text-center">
+              <div class="text-sm text-slate-500">No plans yet.</div>
+              <div class="text-xs text-slate-400 mt-1">Add items, assign them, and reorder by dragging.</div>
+            </div>
+          `}
+        </div>
+
+        <!-- Saved places quick list -->
+        <div class="mt-8">
+          <div class="flex items-center justify-between">
+            <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Saved places</div>
+            <div class="text-xs text-slate-400">${savedPlaces.length}</div>
+          </div>
+          <div class="mt-3 grid grid-cols-1 gap-3">
+            ${savedPlaces.length ? savedPlaces.slice(0,6).map(p=>`
+              <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                <div>
+                  <div class="font-extrabold text-slate-900">${safe(p.name)}</div>
+                  <div class="text-xs text-slate-500 mt-1">${safe([p.area,p.tag].filter(Boolean).join(" · "))}</div>
+                </div>
+                <button data-action="quickAddPlace" data-trip="${trip.id}" data-day="${day.id}" data-place="${p.id}"
+                  class="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-extrabold tap">Add</button>
+              </div>
+            `).join("") : `<div class="text-sm text-slate-400 italic">Save places to reuse across days.</div>`}
+          </div>
+        </div>
+      </div>
+
+      ${(!readOnly && member) ? `
+        <div class="px-6 pb-6 bg-white border-t border-slate-100">
+          <button data-action="openAddItem" data-type="activity" class="w-full py-3 rounded-2xl bg-slate-900 text-white font-extrabold tap inline-flex items-center justify-center gap-2">
+            <i data-lucide="plus" class="w-4 h-4"></i> Add to this day
+          </button>
+        </div>
+      ` : (trip.status==="past" ? `
+        <div class="bg-slate-900 text-white text-center py-3 text-xs font-extrabold uppercase tracking-widest">Archived Trip</div>
+      ` : `
+        <div class="px-6 pb-6 bg-white border-t border-slate-100">
+          <button data-action="requestJoin" data-trip="${trip.id}" class="w-full py-3 rounded-2xl bg-indigo-600 text-white font-extrabold tap">Request to join to edit</button>
+        </div>
+      `)}
+    </div>
+  `;
+}
+
+function plannerItemCard(trip, day, it, readOnly, member){
+  const assignee = getUser(it.assignedTo || trip.ownerId);
+  const typeIcon = ({flight:"plane", stay:"home", food:"utensils", activity:"camera"})[it.type] || "camera";
+  const typeTone = ({flight:"bg-sky-50 text-sky-700", stay:"bg-indigo-50 text-indigo-700", food:"bg-orange-50 text-orange-700", activity:"bg-slate-100 text-slate-700"})[it.type] || "bg-slate-100 text-slate-700";
+
+  return `
+    <div data-draggable-item="1" draggable="${(!readOnly && member) ? "true":"false"}"
+      ondragstart="onDragStart(event)" ondragend="onDragEnd(event)"
+      data-trip-id="${trip.id}" data-day-id="${day.id}" data-item-id="${it.id}"
+      class="p-4 rounded-2xl border ${it.done ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-white"} ring-soft tap">
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex items-start gap-3">
+          <button data-action="toggleDone" data-trip="${trip.id}" data-day="${day.id}" data-item="${it.id}"
+            class="mt-0.5 w-6 h-6 rounded-lg ${it.done ? "bg-emerald-600 text-white":"bg-slate-100 text-slate-500"} flex items-center justify-center tap">
+            <i data-lucide="check" class="w-4 h-4"></i>
+          </button>
+
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-extrabold ${typeTone}">
+                <i data-lucide="${typeIcon}" class="w-4 h-4 mr-1.5"></i>${safe(it.type)}
+              </span>
+              ${it.time ? `<span class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">${safe(it.time)}</span>` : ""}
+            </div>
+
+            <div class="mt-2 font-extrabold text-slate-900 ${it.done ? "line-through opacity-70":""}">${safe(it.title)}</div>
+            ${(it.location||"") ? `<div class="text-sm text-slate-500 mt-1">${safe(it.location)}</div>` : ""}
+            ${(it.notes||"") ? `<div class="text-sm text-slate-600 mt-2">${safe(it.notes)}</div>` : ""}
+
+            <div class="mt-3 flex items-center gap-2 text-xs text-slate-500 font-bold">
+              <div class="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(assignee.avatar)}</div>
+              Assigned to ${safe(assignee.name)}
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-col items-end gap-2">
+          <div data-drop-target="1" data-target-item-id="${it.id}" class="w-6 h-6 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center" title="Drop here to reorder">
+            <i data-lucide="grip-vertical" class="w-4 h-4"></i>
+          </div>
+          ${(!readOnly && member) ? `
+            <button data-action="openEditItem" data-trip="${trip.id}" data-day="${day.id}" data-item="${it.id}"
+              class="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-extrabold tap">Edit</button>
+            <button data-action="deleteItem" data-trip="${trip.id}" data-day="${day.id}" data-item="${it.id}"
+              class="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-extrabold tap">Delete</button>
+          ` : ""}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- Updates Tab ---------- */
+function UpdatesTab(trip){
+  const list = (trip.updates||[]).slice().sort((a,b)=>b.at-a.at).slice(0, 60);
+  return `
+    <div class="h-full bg-slate-50 flex flex-col">
+      <div class="p-6 bg-white border-b border-slate-100">
+        <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Internal updates</div>
+        <div class="text-lg font-extrabold text-slate-900 mt-1">What changed, and who did it</div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto no-scrollbar p-6 space-y-3">
+        ${list.length ? list.map(u=>{
+          const actor = getUser(u.actorId);
+          const badge = ({planner:"bg-indigo-50 text-indigo-700", people:"bg-amber-50 text-amber-800", story:"bg-emerald-50 text-emerald-700", chat:"bg-slate-100 text-slate-700", system:"bg-slate-100 text-slate-700"})[u.kind] || "bg-slate-100 text-slate-700";
+          return `
+            <div class="p-4 rounded-2xl bg-white border border-slate-100 shadow-sm">
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex items-start gap-3">
+                  <div class="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(actor.avatar)}</div>
+                  <div>
+                    <div class="text-sm font-extrabold text-slate-900">${safe(actor.name)}</div>
+                    <div class="text-sm text-slate-600 mt-1">${safe(u.text)}</div>
+                    <div class="text-xs text-slate-400 mt-2">${formatTimeAgo(u.at)} ago</div>
+                  </div>
+                </div>
+                <span class="px-3 py-1 rounded-full text-xs font-extrabold ${badge}">${safe(u.kind)}</span>
+              </div>
+            </div>
+          `;
+        }).join("") : `<div class="text-sm text-slate-400 italic">No updates yet.</div>`}
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- People Tab ---------- */
+function PeopleTab(trip, readOnly){
+  const isTripOwner = trip.ownerId === state.actorId;
+  const pending = (trip.joinRequests||[]).filter(r=>r.status==="pending");
+
+  return `
+    <div class="h-full bg-white flex flex-col">
+      <div class="p-6 bg-slate-50 border-b border-slate-100">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">People</div>
+            <div class="text-lg font-extrabold text-slate-900 mt-1">Members + join requests</div>
+          </div>
+          <span class="px-3 py-1 rounded-full text-xs font-extrabold ${pending.length ? "bg-amber-50 text-amber-800":"bg-slate-100 text-slate-700"}">
+            <i data-lucide="user-plus" class="w-4 h-4 mr-1.5"></i>${pending.length ? `${pending.length} pending` : "No requests"}
+          </span>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto no-scrollbar p-6 space-y-6">
+        <section>
+          <div class="flex items-center justify-between">
+            <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Members</div>
+            ${isTripOwner ? `<button data-action="openAddFriend" class="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-extrabold tap">Add friend</button>` : ""}
+          </div>
+
+          <div class="mt-3 space-y-3">
+            ${trip.participants.map(p=>{
+              const u = getUser(p.id);
+              return `
+                <div class="p-4 rounded-2xl border border-slate-200 bg-white flex items-center justify-between">
+                  <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(u.avatar)}</div>
+                    <div>
+                      <div class="font-extrabold text-slate-900">${safe(u.name)}</div>
+                      <div class="text-sm text-slate-500">${safe(p.role)}</div>
+                    </div>
+                  </div>
+                  ${isTripOwner && p.role!=="owner" ? `
+                    <button data-action="removeMember" data-trip="${trip.id}" data-user="${p.id}"
+                      class="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-extrabold tap inline-flex items-center gap-2">
+                      <i data-lucide="trash-2" class="w-4 h-4"></i> Remove
+                    </button>
+                  ` : `<span class="text-xs font-bold text-slate-400">${p.role==="owner" ? "Owner" : ""}</span>`}
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </section>
+
+        <div class="h-px bg-slate-100"></div>
+
+        <section>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Join requests</div>
+          ${!trip.audience.allowJoinRequests ? `
+            <div class="mt-3 text-sm text-slate-500">Join requests are disabled for this trip.</div>
+          ` : `
+            <div class="mt-3 space-y-3">
+              ${trip.joinRequests.length ? trip.joinRequests.map(r=>{
+                const u = getUser(r.userId);
+                return `
+                  <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                    <div class="flex items-start justify-between gap-3">
+                      <div class="flex items-start gap-3">
+                        <div class="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(u.avatar)}</div>
+                        <div>
+                          <div class="font-extrabold text-slate-900">${safe(u.name)}</div>
+                          <div class="text-sm text-slate-600 mt-1">${safe(r.note || "")}</div>
+                          <div class="text-xs text-slate-400 mt-2">${formatTimeAgo(r.createdAt)} ago</div>
+                        </div>
+                      </div>
+
+                      <div class="flex items-center gap-2">
+                        ${r.status==="pending" ? (
+                          isTripOwner ? `
+                            <button data-action="approveRequest" data-trip="${trip.id}" data-req="${r.id}"
+                              class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-extrabold tap inline-flex items-center gap-1">
+                              <i data-lucide="check" class="w-4 h-4"></i> Approve
+                            </button>
+                            <button data-action="declineRequest" data-trip="${trip.id}" data-req="${r.id}"
+                              class="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-extrabold tap inline-flex items-center gap-1">
+                              <i data-lucide="x" class="w-4 h-4"></i> Decline
+                            </button>
+                          ` : `<span class="px-3 py-1 rounded-full bg-amber-50 text-amber-800 text-xs font-extrabold">Pending</span>`
+                        ) : (r.status==="approved" ? `<span class="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-extrabold">Approved</span>`
+                          : `<span class="px-3 py-1 rounded-full bg-red-50 text-red-700 text-xs font-extrabold">Declined</span>`
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                `;
+              }).join("") : `<div class="text-sm text-slate-400 italic">No requests yet.</div>`}
+
+              ${isTripOwner ? `
+                <button data-action="simulateJoin" data-trip="${trip.id}"
+                  class="w-full py-3 rounded-2xl bg-indigo-50 text-indigo-700 font-extrabold tap inline-flex items-center justify-center gap-2">
+                  <i data-lucide="sparkles" class="w-4 h-4"></i> Simulate a join request
+                </button>
+              ` : ""}
+            </div>
+          `}
+        </section>
+
+        ${(!isParticipant(trip, state.actorId) && trip.audience.allowJoinRequests) ? `
+          <button data-action="requestJoin" data-trip="${trip.id}"
+            class="w-full py-3 rounded-2xl bg-indigo-600 text-white font-extrabold tap">Request to join</button>
+        ` : ""}
+
+        ${(!isParticipant(trip, state.actorId) && !trip.audience.allowJoinRequests) ? `
+          <div class="text-sm text-slate-500">You can view this passport, but joining is disabled.</div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- Chat Tab ---------- */
+function ChatTab(trip, readOnly, member){
+  const list = (trip.chat||[]).slice();
+  const canSend = member && !readOnly;
+  return `
+    <div class="h-full bg-slate-50 flex flex-col">
+      <div class="p-6 bg-white border-b border-slate-100">
+        <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Group chat</div>
+        <div class="text-lg font-extrabold text-slate-900 mt-1">One thread, one trip</div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto no-scrollbar p-6 space-y-3">
+        ${list.length ? list.map(m=>{
+          const isMe = m.authorId === state.actorId;
+          const u = getUser(m.authorId);
+          return `
+            <div class="flex ${isMe ? "justify-end":"justify-start"}">
+              <div class="max-w-[85%] rounded-2xl px-4 py-3 border ${isMe ? "bg-indigo-600 text-white border-indigo-600":"bg-white text-slate-900 border-slate-200"}">
+                <div class="text-[10px] font-extrabold uppercase tracking-wider ${isMe ? "text-indigo-100":"text-slate-400"}">
+                  ${safe(u.name)} · ${formatTimeAgo(m.createdAt)}
+                </div>
+                <div class="text-sm mt-1 leading-relaxed">${safe(m.text)}</div>
+              </div>
+            </div>
+          `;
+        }).join("") : `<div class="text-sm text-slate-400 italic">No messages yet.</div>`}
+      </div>
+
+      ${canSend ? `
+        <div class="p-4 pb-6 bg-white border-t border-slate-100">
+          <div class="flex items-center bg-slate-100 rounded-full px-4">
+            <i data-lucide="message-circle" class="w-5 h-5 text-slate-400 mr-2"></i>
+            <input data-bind="chatText" value="${safe(state.draft.chatText||"")}" placeholder="Message the trip…"
+              class="flex-1 bg-transparent py-3 outline-none text-slate-900 placeholder-slate-400 text-sm"/>
+            <button data-action="sendChat" data-trip="${trip.id}" class="ml-2 p-2 rounded-full ${((state.draft.chatText||"").trim()) ? "text-indigo-600":"text-slate-300"} tap" aria-label="send">
+              <i data-lucide="send" class="w-5 h-5"></i>
+            </button>
+          </div>
+        </div>
+      ` : `
+        <div class="bg-slate-900 text-white text-center py-3 text-xs font-extrabold uppercase tracking-widest">
+          ${trip.status==="past" ? "Archived Trip" : "Join to chat"}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+/* ---------- Story Tab (external share) ---------- */
+function StoryTab(trip){
+  const stats = trip.story?.wallStats || {likes:0, comments:0};
+  const published = !!trip.publish?.toWall;
+
+  const photoGrid = (trip.story?.photos || []).slice(0, 6);
+  const moments = (trip.story?.moments || []).slice(0, 12);
+
+  return `
+    <div class="h-full bg-white flex flex-col">
+      <div class="p-6 bg-slate-50 border-b border-slate-100">
+        <div class="flex items-start justify-between">
+          <div>
+            <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">External story</div>
+            <div class="text-lg font-extrabold text-slate-900 mt-1">What others see on their Wall</div>
+          </div>
+          <label class="inline-flex items-center gap-2">
+            <span class="text-xs font-extrabold ${published ? "text-emerald-700":"text-slate-500"}">${published ? "Published":"Not published"}</span>
+            <input type="checkbox" data-action="togglePublish" data-trip="${trip.id}" ${published?"checked":""} class="h-4 w-4"/>
+          </label>
+        </div>
+
+        <div class="mt-4 rounded-2xl overflow-hidden ring-soft">
+          <div class="h-28 ${coverClass(trip)} relative" style="${coverStyle(trip)}">
+            <div class="absolute inset-0 bg-black/20"></div>
+            <div class="absolute left-4 bottom-3 right-4">
+              <div class="text-white text-lg font-extrabold">${safe(trip.destination)}</div>
+              <div class="text-white/90 text-xs font-semibold mt-1">${safe(trip.dates)}</div>
+            </div>
+          </div>
+          <div class="p-4 bg-white">
+            <div class="text-sm font-extrabold text-slate-900">${safe(trip.story?.headline || `${trip.destination} passport`)}</div>
+            <div class="mt-2 text-sm text-slate-500">${safe((trip.story?.highlights||[]).slice(0,3).join(" · ") || "Add highlights to make it pop.")}</div>
+
+            <div class="mt-4 flex items-center justify-between">
+              <div class="flex items-center gap-4 text-slate-500 text-xs font-bold">
+                <span class="inline-flex items-center gap-1"><i data-lucide="heart" class="w-4 h-4"></i>${stats.likes}</span>
+                <span class="inline-flex items-center gap-1"><i data-lucide="message-circle" class="w-4 h-4"></i>${stats.comments}</span>
+              </div>
+              <button data-action="openStoryView" data-trip="${trip.id}" class="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-extrabold tap">Preview</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 grid grid-cols-2 gap-3">
+          <div class="p-4 rounded-2xl bg-white ring-soft">
+            <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Cover photo (optional)</div>
+            <input data-bind="coverURL" value="${safe(trip.cover?.photoURL || "")}" placeholder="Paste image URL"
+              class="mt-2 w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"/>
+            <button data-action="saveCover" data-trip="${trip.id}" class="mt-3 w-full py-2 rounded-xl bg-slate-900 text-white text-xs font-extrabold tap">Save cover</button>
+            <div class="text-[11px] text-slate-400 mt-2">If broken, clear the URL to fall back to gradients.</div>
+          </div>
+
+          <div class="p-4 rounded-2xl bg-white ring-soft">
+            <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Post a moment</div>
+            <textarea data-bind="momentCaption" rows="3" placeholder="Drop a live update…"
+              class="mt-2 w-full border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"></textarea>
+            <button data-action="postMoment" data-trip="${trip.id}" class="mt-3 w-full py-2 rounded-xl bg-indigo-600 text-white text-xs font-extrabold tap">Post</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto no-scrollbar p-6 bg-white">
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Recent moments</div>
+          <div class="text-xs text-slate-400">${moments.length}</div>
+        </div>
+
+        <div class="mt-3 space-y-3">
+          ${moments.length ? moments.map(m=>{
+            const u = getUser(m.authorId);
+            return `
+              <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                <div class="flex items-start gap-3">
+                  <div class="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(u.avatar)}</div>
+                  <div class="flex-1">
+                    <div class="flex items-center justify-between">
+                      <div class="font-extrabold text-slate-900">${safe(u.name)}</div>
+                      <div class="text-xs text-slate-400 font-bold">${formatTimeAgo(m.at)}</div>
+                    </div>
+                    <div class="text-sm text-slate-700 mt-1">${safe(m.caption||"")}</div>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join("") : `<div class="text-sm text-slate-400 italic">No moments yet. Post quick updates to build the story.</div>`}
+        </div>
+
+        <div class="mt-8">
+          <div class="flex items-center justify-between">
+            <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Photos</div>
+            <button data-action="openAddPhoto" data-trip="${trip.id}" class="px-3 py-2 rounded-xl bg-slate-900 text-white text-xs font-extrabold tap">Add</button>
+          </div>
+
+          <div class="mt-3 grid grid-cols-3 gap-2">
+            ${photoGrid.length ? photoGrid.map(ph=>`
+              <div class="aspect-square rounded-2xl overflow-hidden bg-slate-100 ring-soft">
+                <img src="${safe(ph.url)}" alt="${safe(ph.caption||"photo")}" class="w-full h-full object-cover"
+                  onerror="this.style.display='none'; this.parentElement.classList.add('img-fallback');" />
+              </div>
+            `).join("") : `<div class="col-span-3 text-sm text-slate-400 italic">Add photos to make the story addictive.</div>`}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- Story View (full-screen preview) ---------- */
+function StoryViewScreen(){
+  const trip = tripById(state.activeTripId);
+  if (!trip) return `<div class="p-6">Not found. <button data-action="goHome" class="underline">Home</button></div>`;
+  const owner = getUser(trip.ownerId);
+  const stats = trip.story?.wallStats || {likes:0, comments:0};
+  const photos = trip.story?.photos || [];
+  const moments = trip.story?.moments || [];
+  const highlights = trip.story?.highlights || [];
+
+  const canJoin = trip.audience.allowJoinRequests && !isParticipant(trip, state.actorId) && trip.ownerId !== state.actorId;
+  const pending = (trip.joinRequests||[]).some(r=>r.userId===state.actorId && r.status==="pending");
+
+  return `
+    <div class="h-full bg-black flex flex-col">
+      <div class="px-6 pt-8 pb-4">
+        <div class="flex items-center justify-between text-white">
+          <button data-action="goHome" class="tap" aria-label="back">
+            <i data-lucide="arrow-left" class="w-6 h-6"></i>
+          </button>
+          <div class="text-xs font-extrabold uppercase tracking-wider opacity-80">Trip Story</div>
+          <button data-action="openComments" data-trip="${trip.id}" class="tap" aria-label="comments">
+            <i data-lucide="message-circle" class="w-6 h-6"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto no-scrollbar px-6 pb-6">
+        <div class="rounded-3xl overflow-hidden bg-white">
+          <div class="h-52 ${coverClass(trip)} relative" style="${coverStyle(trip)}">
+            <div class="absolute inset-0 bg-black/35"></div>
+            <div class="absolute left-5 bottom-5 right-5">
+              <div class="text-white text-2xl font-extrabold">${safe(trip.destination)}</div>
+              <div class="mt-1 text-white/90 text-sm font-semibold">${safe(trip.dates)}</div>
+              <div class="mt-3 flex items-center gap-2">
+                <div class="w-9 h-9 rounded-full bg-white/85 text-slate-800 font-extrabold flex items-center justify-center">${safe(owner.avatar)}</div>
+                <div class="text-white text-sm font-extrabold">${safe(owner.name)}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="p-5">
+            <div class="text-lg font-extrabold text-slate-900">${safe(trip.story?.headline || "")}</div>
+            ${highlights.length ? `
+              <div class="mt-3 flex flex-wrap gap-2">
+                ${highlights.slice(0,6).map(h=>`
+                  <span class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-extrabold">${safe(h)}</span>
+                `).join("")}
+              </div>
+            ` : `<div class="mt-2 text-sm text-slate-500">No highlights yet.</div>`}
+
+            <div class="mt-5 flex items-center justify-between">
+              <div class="flex items-center gap-4 text-slate-500 text-xs font-bold">
+                <span class="inline-flex items-center gap-1"><i data-lucide="heart" class="w-4 h-4"></i>${stats.likes}</span>
+                <span class="inline-flex items-center gap-1"><i data-lucide="message-circle" class="w-4 h-4"></i>${stats.comments}</span>
+              </div>
+
+              <button data-action="likeTrip" data-trip="${trip.id}"
+                class="px-4 py-2 rounded-2xl bg-slate-900 text-white text-xs font-extrabold tap inline-flex items-center gap-2">
+                <i data-lucide="heart" class="w-4 h-4"></i> Like
+              </button>
+            </div>
+
+            <div class="mt-5">
+              <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Moments</div>
+              <div class="mt-3 space-y-3">
+                ${moments.length ? moments.map(m=>{
+                  const u = getUser(m.authorId);
+                  return `
+                    <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                      <div class="flex items-start gap-3">
+                        <div class="w-9 h-9 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(u.avatar)}</div>
+                        <div class="flex-1">
+                          <div class="flex items-center justify-between">
+                            <div class="font-extrabold text-slate-900">${safe(u.name)}</div>
+                            <div class="text-xs text-slate-400 font-bold">${formatTimeAgo(m.at)}</div>
+                          </div>
+                          <div class="text-sm text-slate-700 mt-1">${safe(m.caption||"")}</div>
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join("") : `<div class="text-sm text-slate-400 italic">No moments yet.</div>`}
+              </div>
+            </div>
+
+            <div class="mt-6">
+              <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Photos</div>
+              <div class="mt-3 grid grid-cols-3 gap-2">
+                ${photos.length ? photos.slice(0,9).map(ph=>`
+                  <div class="aspect-square rounded-2xl overflow-hidden bg-slate-100 ring-soft">
+                    <img src="${safe(ph.url)}" alt="${safe(ph.caption||"photo")}" class="w-full h-full object-cover"
+                      onerror="this.style.display='none'; this.parentElement.classList.add('img-fallback');" />
+                  </div>
+                `).join("") : `<div class="col-span-3 text-sm text-slate-400 italic">No photos yet.</div>`}
+              </div>
+            </div>
+
+            ${canJoin ? `
+              <div class="mt-6">
+                <button data-action="requestJoin" data-trip="${trip.id}"
+                  class="w-full py-3 rounded-2xl ${pending ? "bg-amber-50 text-amber-800":"bg-indigo-600 text-white"} font-extrabold tap">
+                  ${pending ? "Join request pending" : "Request to join this trip"}
+                </button>
+              </div>
+            ` : ""}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/* ---------- Modals ---------- */
+function ModalFrame(open, inner){
+  if (!open) return "";
+  return `
+    <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
+      <button data-action="closeModal" class="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-label="close"></button>
+      <div class="relative w-full max-w-md rounded-3xl bg-white shadow-2xl border border-slate-100 overflow-hidden">
+        ${inner}
+      </div>
+    </div>
+  `;
+}
+
+function Modals(trip){
+  return `
+    ${ShareModal(trip)}
+    ${AddItemModal(trip)}
+    ${EditItemModal(trip)}
+    ${AddPlaceModal(trip)}
+    ${CommentsModal()}
+    ${TripPickerModal()}
+    ${AddFriendModal(trip)}
+    ${SettingsModal(trip)}
+    ${AddPhotoModal(trip)}
+  `;
+}
+
+function ShareModal(trip){
+  if (!trip) return "";
+  const open = state.modals.share;
+  const url = `passport.app/join/${trip.share.linkCode}`;
+  const note = trip.share.shareNote || "";
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="text-center mb-5">
+        <div class="h-12 w-12 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4">
+          <i data-lucide="share-2" class="w-6 h-6"></i>
+        </div>
+        <div class="text-lg font-extrabold text-slate-900">Share this Passport</div>
+        <div class="text-sm text-slate-500 mt-2">Invite travelers or share the story externally.</div>
+      </div>
+
+      <div class="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex items-center justify-between mb-4">
+        <span class="text-xs text-slate-700 font-mono truncate mr-2">${safe(url)}</span>
+        <button data-action="copy" data-text="${safe(url)}" class="text-indigo-600 text-xs font-extrabold">COPY</button>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-2xl p-4 mb-5">
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Visibility</div>
+          <span class="px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-extrabold ring-soft">${safe(audienceName(trip.audience.visibility))}</span>
+        </div>
+        <div class="mt-2 text-sm text-slate-500">${safe(note)}</div>
+      </div>
+
+      <div class="space-y-3">
+        <button data-action="closeShare" class="w-full bg-slate-900 text-white font-extrabold py-3 rounded-2xl tap">Done</button>
+        ${trip.audience.allowJoinRequests && (trip.ownerId===state.actorId) ? `
+          <button data-action="simulateJoin" data-trip="${trip.id}"
+            class="w-full bg-indigo-50 text-indigo-700 font-extrabold py-3 rounded-2xl tap inline-flex items-center justify-center gap-2">
+            <i data-lucide="user-plus" class="w-4 h-4"></i> Simulate join request
+          </button>
+        ` : ""}
+      </div>
+    </div>
+  `);
+}
+
+function AddItemModal(trip){
+  if (!trip) return "";
+  const open = state.modals.addItem;
+  const d = state.draft || {};
+  const dayId = state.activeDayId;
+  const day = trip.planner.days.find(x=>x.id===dayId);
+  const member = isParticipant(trip, state.actorId);
+  const readOnly = trip.status==="past";
+  if (!member || readOnly) return ModalFrame(false, "");
+
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Add to itinerary</div>
+          <div class="text-xl font-extrabold text-slate-900 mt-1">New plan item</div>
+          <div class="text-sm text-slate-500 mt-1">${safe(day?.label || "")}</div>
+        </div>
+        <button data-action="closeAddItem" class="text-slate-400 tap"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <div class="mt-5 space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <select data-bind="itemType" class="border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-semibold">
+            ${["flight","stay","food","activity"].map(k => `<option value="${k}" ${(d.itemType||"activity")===k?"selected":""}>${k}</option>`).join("")}
+          </select>
+          <input data-bind="itemTime" value="${safe(d.itemTime||"")}" placeholder="Time (optional)"
+            class="border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"/>
+        </div>
+
+        <input data-bind="itemTitle" value="${safe(d.itemTitle||"")}" placeholder="Title (e.g., Dinner at Monk)"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"/>
+        <input data-bind="itemLocation" value="${safe(d.itemLocation||"")}" placeholder="Location (optional)"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"/>
+        <textarea data-bind="itemNotes" rows="3" placeholder="Notes (optional)"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm">${safe(d.itemNotes||"")}</textarea>
+
+        <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Assign to</div>
+          <select data-bind="itemAssignedTo" class="mt-2 w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-semibold">
+            ${trip.participants.map(p=>{
+              const u = getUser(p.id);
+              return `<option value="${p.id}" ${(d.itemAssignedTo||state.actorId)===p.id?"selected":""}>${safe(u.name)}</option>`;
+            }).join("")}
+          </select>
+        </div>
+
+        <button data-action="addItem" data-trip="${trip.id}" data-day="${dayId}"
+          class="w-full py-3 rounded-2xl bg-indigo-600 text-white font-extrabold tap">
+          Add to day
+        </button>
+      </div>
+    </div>
+  `);
+}
+
+function EditItemModal(trip){
+  if (!trip) return "";
+  const open = state.modals.editItem;
+  const d = state.draft || {};
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Edit itinerary item</div>
+          <div class="text-xl font-extrabold text-slate-900 mt-1">${safe(d.title || "")}</div>
+        </div>
+        <button data-action="closeEditItem" class="text-slate-400 tap"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <div class="mt-5 space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <select data-bind="type" class="border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-semibold">
+            ${["flight","stay","food","activity"].map(k => `<option value="${k}" ${(d.type||"activity")===k?"selected":""}>${k}</option>`).join("")}
+          </select>
+          <input data-bind="time" value="${safe(d.time||"")}" placeholder="Time"
+            class="border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"/>
+        </div>
+
+        <input data-bind="title" value="${safe(d.title||"")}" placeholder="Title"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"/>
+        <input data-bind="location" value="${safe(d.location||"")}" placeholder="Location"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"/>
+        <textarea data-bind="notes" rows="3" placeholder="Notes"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm">${safe(d.notes||"")}</textarea>
+
+        <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Assign to</div>
+          <select data-bind="assignedTo" class="mt-2 w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-semibold">
+            ${(trip.participants||[]).map(p=>{
+              const u = getUser(p.id);
+              return `<option value="${p.id}" ${(d.assignedTo||state.actorId)===p.id?"selected":""}>${safe(u.name)}</option>`;
+            }).join("")}
+          </select>
+        </div>
+
+        <button data-action="saveEditItem" class="w-full py-3 rounded-2xl bg-slate-900 text-white font-extrabold tap">Save changes</button>
+      </div>
+    </div>
+  `);
+}
+
+function AddPlaceModal(trip){
+  if (!trip) return "";
+  const open = state.modals.addPlace;
+  const d = state.draft || {};
+  const member = isParticipant(trip, state.actorId);
+  const readOnly = trip.status==="past";
+  if (!member || readOnly) return ModalFrame(false, "");
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Save a place</div>
+          <div class="text-xl font-extrabold text-slate-900 mt-1">Add to your place box</div>
+        </div>
+        <button data-action="closeAddPlace" class="text-slate-400 tap"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <div class="mt-5 space-y-3">
+        <input data-bind="placeName" value="${safe(d.placeName||"")}" placeholder="Place name"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"/>
+        <input data-bind="placeArea" value="${safe(d.placeArea||"")}" placeholder="Area / neighborhood (optional)"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"/>
+        <input data-bind="placeTag" value="${safe(d.placeTag||"")}" placeholder="Tag (optional)"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"/>
+
+        <button data-action="savePlace" data-trip="${trip.id}"
+          class="w-full py-3 rounded-2xl bg-indigo-600 text-white font-extrabold tap">Save place</button>
+
+        <div class="text-xs text-slate-400">Saved places can be added to any day with one tap.</div>
+      </div>
+    </div>
+  `);
+}
+
+function CommentsModal(){
+  const open = state.modals.comments;
+  const trip = tripById(state.draft.commentsTripId);
+  if (!trip) return ModalFrame(false, "");
+  const comments = trip.story?.wallComments || [];
+  const d = state.draft || {};
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Comments</div>
+          <div class="text-xl font-extrabold text-slate-900 mt-1">${safe(trip.destination)}</div>
+        </div>
+        <button data-action="closeComments" class="text-slate-400 tap"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <div class="mt-5 max-h-[360px] overflow-y-auto no-scrollbar space-y-3">
+        ${comments.length ? comments.slice(-30).map(c=>{
+          const u = getUser(c.authorId);
+          return `
+            <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+              <div class="flex items-start gap-3">
+                <div class="w-9 h-9 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(u.avatar)}</div>
+                <div class="flex-1">
+                  <div class="flex items-center justify-between">
+                    <div class="font-extrabold text-slate-900">${safe(u.name)}</div>
+                    <div class="text-xs text-slate-400 font-bold">${formatTimeAgo(c.at)}</div>
+                  </div>
+                  <div class="text-sm text-slate-700 mt-1">${safe(c.text)}</div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join("") : `<div class="text-sm text-slate-400 italic">No comments yet.</div>`}
+      </div>
+
+      <div class="mt-4 flex items-center gap-2">
+        <input data-bind="commentText" value="${safe(d.commentText||"")}" placeholder="Write a comment…"
+          class="flex-1 border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 text-sm"/>
+        <button data-action="sendComment" data-trip="${trip.id}" class="px-4 py-2 rounded-2xl bg-slate-900 text-white text-sm font-extrabold tap">Send</button>
+      </div>
+    </div>
+  `);
+}
+
+function TripPickerModal(){
+  const open = state.modals.tripPicker;
+  const dest = state.draft.tripPickerDestination;
+  if (!dest) return ModalFrame(false, "");
+  const trips = state.trips.filter(t => (t.destination||"") === dest && t.publish?.isLive && t.status==="upcoming");
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Trips in</div>
+          <div class="text-xl font-extrabold text-slate-900 mt-1">${safe(dest)}</div>
+          <div class="text-sm text-slate-500 mt-1">${trips.length} live trip${trips.length>1?"s":""}</div>
+        </div>
+        <button data-action="closeTripPicker" class="text-slate-400 tap"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <div class="mt-5 space-y-3">
+        ${trips.map(t=>`
+          <button data-action="openTrip" data-trip="${t.id}" class="w-full text-left p-4 rounded-2xl border border-slate-200 bg-white tap">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="font-extrabold text-slate-900">${safe(t.dates)}</div>
+                <div class="text-sm text-slate-500 mt-1">Owner: ${safe(getUser(t.ownerId).name)}</div>
+              </div>
+              <div class="w-10 h-10 rounded-2xl ${coverClass(t)}"></div>
+            </div>
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `);
+}
+
+function AddFriendModal(trip){
+  if (!trip) return "";
+  const open = state.modals.addFriend;
+  const isTripOwner = trip.ownerId === state.actorId;
+  if (!isTripOwner) return ModalFrame(false, "");
+  const candidates = state.users.filter(u => !trip.participants.some(p=>p.id===u.id));
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Add friends</div>
+          <div class="text-xl font-extrabold text-slate-900 mt-1">Invite to collaborate</div>
+        </div>
+        <button data-action="closeAddFriend" class="text-slate-400 tap"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <div class="mt-5 space-y-2 max-h-[420px] overflow-y-auto no-scrollbar">
+        ${candidates.map(u=>`
+          <button data-action="addFriend" data-trip="${trip.id}" data-user="${u.id}" class="w-full p-4 rounded-2xl bg-slate-50 border border-slate-200 tap text-left">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-slate-200 flex items-center justify-center font-extrabold text-slate-700">${safe(u.avatar)}</div>
+                <div>
+                  <div class="font-extrabold text-slate-900">${safe(u.name)}</div>
+                  <div class="text-xs text-slate-500">Tap to add</div>
+                </div>
+              </div>
+              <i data-lucide="user-plus" class="w-5 h-5 text-indigo-600"></i>
+            </div>
+          </button>
+        `).join("")}
+      </div>
+    </div>
+  `);
+}
+
+function SettingsModal(trip){
+  if (!trip) return "";
+  const open = state.modals.settings;
+  const d = state.draft || {};
+  const vis = d.settingsVisibility || trip.audience.visibility;
+  const allow = (d.settingsAllowJoin ?? trip.audience.allowJoinRequests);
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Trip settings</div>
+          <div class="text-xl font-extrabold text-slate-900 mt-1">Audience & controls</div>
+        </div>
+        <button data-action="closeSettings" class="text-slate-400 tap"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <div class="mt-5 space-y-4">
+        <div class="p-4 rounded-2xl border border-slate-200 bg-white">
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Visibility</div>
+          <select data-bind="settingsVisibility" class="mt-2 w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-semibold">
+            ${AUDIENCES.map(a=>`<option value="${a.key}" ${a.key===vis?"selected":""}>${safe(a.name)}</option>`).join("")}
+          </select>
+          <div class="text-sm text-slate-500 mt-2">${safe(AUDIENCES.find(a=>a.key===vis)?.desc||"")}</div>
+        </div>
+
+        <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-start justify-between gap-4">
+          <div>
+            <div class="font-extrabold text-slate-900">Allow join requests</div>
+            <div class="text-sm text-slate-500 mt-1">Enable a “request to join” flow.</div>
+          </div>
+          <label class="inline-flex items-center cursor-pointer select-none">
+            <input type="checkbox" data-bind="settingsAllowJoin" ${allow ? "checked":""} class="sr-only"/>
+            <span class="w-14 h-9 rounded-full ${allow ? "bg-indigo-600":"bg-slate-300"} p-1 transition-colors">
+              <span class="block w-7 h-7 rounded-full bg-white shadow-sm transition-transform ${allow ? "translate-x-5":""}"></span>
+            </span>
+          </label>
+        </div>
+
+        <div class="p-4 rounded-2xl border border-slate-200 bg-white">
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Share link</div>
+          <div class="mt-2 flex items-center justify-between">
+            <div class="text-sm font-mono text-slate-700 truncate">passport.app/join/${safe(trip.share.linkCode)}</div>
+            <button data-action="copy" data-text="${safe("passport.app/join/"+trip.share.linkCode)}" class="px-3 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-extrabold tap">Copy</button>
+          </div>
+          <div class="text-xs text-slate-400 mt-2">MVP note: links are simulated.</div>
+        </div>
+
+        <button data-action="saveSettings" data-trip="${trip.id}" class="w-full py-3 rounded-2xl bg-slate-900 text-white font-extrabold tap">Save</button>
+      </div>
+    </div>
+  `);
+}
+
+function AddPhotoModal(trip){
+  const open = !!state.modals.addPhoto;
+  if (!trip) return ModalFrame(false, "");
+  const d = state.draft || {};
+  return ModalFrame(open, `
+    <div class="p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <div class="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Add photo</div>
+          <div class="text-xl font-extrabold text-slate-900 mt-1">Make the story scrollable</div>
+        </div>
+        <button data-action="closeAddPhoto" class="text-slate-400 tap"><i data-lucide="x" class="w-5 h-5"></i></button>
+      </div>
+
+      <div class="mt-5 space-y-3">
+        <input data-bind="photoURL" value="${safe(d.photoURL||"")}" placeholder="Image URL (https://...)"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"/>
+        <input data-bind="photoCaption" value="${safe(d.photoCaption||"")}" placeholder="Caption (optional)"
+          class="w-full border border-slate-200 rounded-2xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500"/>
+        <button data-action="savePhoto" data-trip="${trip?.id||""}" class="w-full py-3 rounded-2xl bg-indigo-600 text-white font-extrabold tap">Add photo</button>
+        <div class="text-xs text-slate-400">Tip: Unsplash image URLs work well.</div>
+      </div>
+    </div>
+  `);
+}
+
+/* =========================
+   Event handling (delegation)
+   ========================= */
+function wireEvents(){
+  document.addEventListener("click", (e)=>{
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const a = btn.dataset.action;
+
+    // Global
+    if (a==="goHome") return goHome();
+    if (a==="goCreate"){ state.screen="create"; state.draft={ visibility:"close", allowJoinRequests:true, startDate: toISO(new Date()), endDate: toISO(new Date(Date.now()+1000*60*60*24*3)) }; saveState(); return render(); }
+    if (a==="resetApp"){ localStorage.removeItem(LS_KEY); state = { ...state, screen:"home", homeTab:"wall", tripTab:"planner", activeTripId:null, activeDayId:null, actorId:DEFAULT_ME_ID, modals:{share:false, addItem:false, addPlace:false, editItem:false, comments:false, tripPicker:false, addFriend:false, settings:false, addPhoto:false}, draft:{}, users: USERS, trips: seedTrips() }; saveState(); render(); return; }
+    if (a==="setHomeTab"){ state.homeTab = btn.dataset.tab; saveState(); return render(); }
+    if (a==="setTripTab"){ state.tripTab = btn.dataset.tab; saveState(); return render(); }
+    if (a==="setDay"){ state.activeDayId = btn.dataset.day; saveState(); return render(); }
+
+    // Trip navigation
+    if (a==="openTrip"){ return openTrip(btn.dataset.trip); }
+    if (a==="openStoryView"){ return openStoryView(btn.dataset.trip); }
+    if (a==="openTripPicker"){ state.modals.tripPicker=true; state.draft.tripPickerDestination = btn.dataset.destination; saveState(); return render(); }
+    if (a==="closeTripPicker"){ state.modals.tripPicker=false; state.draft.tripPickerDestination=null; saveState(); return render(); }
+
+    // Share / settings
+    if (a==="openShare"){ state.modals.share=true; saveState(); return render(); }
+    if (a==="closeShare"){ state.modals.share=false; saveState(); return render(); }
+    if (a==="copy"){ return copyToClipboard(btn.dataset.text || ""); }
+    if (a==="openSettings"){ state.modals.settings=true; state.draft.settingsVisibility = tripById(state.activeTripId)?.audience?.visibility; state.draft.settingsAllowJoin = tripById(state.activeTripId)?.audience?.allowJoinRequests; saveState(); return render(); }
+    if (a==="closeSettings"){ state.modals.settings=false; saveState(); return render(); }
+    if (a==="saveSettings"){
+      const t = tripById(btn.dataset.trip); if (!t) return;
+      t.audience.visibility = state.draft.settingsVisibility || t.audience.visibility;
+      t.audience.allowJoinRequests = !!state.draft.settingsAllowJoin;
+      addUpdate(t.id, "system", "Updated trip settings.");
+      state.modals.settings=false;
+      saveState(); return render();
+    }
+
+    // Create
+    if (a==="createTrip"){ return createTripFromDraft(); }
+
+    // Planner modals
+    if (a==="openAddItem"){
+      const t = tripById(state.activeTripId); if (!t) return;
+      if (!isParticipant(t, state.actorId) || t.status==="past") return toast("Join to edit");
+      state.modals.addItem = true;
+      state.draft.itemType = btn.dataset.type || "activity";
+      state.draft.itemTime = nowHHMM();
+      state.draft.itemTitle = "";
+      state.draft.itemLocation = "";
+      state.draft.itemNotes = "";
+      state.draft.itemAssignedTo = state.actorId;
+      saveState(); return render();
+    }
+    if (a==="closeAddItem"){ state.modals.addItem=false; saveState(); return render(); }
+    if (a==="addItem"){
+      const title = (state.draft.itemTitle||"").trim();
+      if (!title) return toast("Title required");
+      addPlannerItem(btn.dataset.trip, btn.dataset.day, {
+        type: state.draft.itemType,
+        time: (state.draft.itemTime||"").trim(),
+        title,
+        location: (state.draft.itemLocation||"").trim(),
+        notes: (state.draft.itemNotes||"").trim(),
+        assignedTo: state.draft.itemAssignedTo || state.actorId,
+      });
+      state.modals.addItem=false;
+      state.draft.itemTitle=""; state.draft.itemLocation=""; state.draft.itemNotes="";
+      saveState(); return render();
+    }
+
+    // Item actions
+    if (a==="toggleDone") return toggleDone(btn.dataset.trip, btn.dataset.day, btn.dataset.item);
+    if (a==="deleteItem") return deleteItem(btn.dataset.trip, btn.dataset.day, btn.dataset.item);
+    if (a==="openEditItem") return openEditItem(btn.dataset.trip, btn.dataset.day, btn.dataset.item);
+    if (a==="closeEditItem"){ state.modals.editItem=false; state.draft={}; saveState(); return render(); }
+    if (a==="saveEditItem") return saveEditItem();
+
+    // Places
+    if (a==="openAddPlace"){
+      const t = tripById(state.activeTripId); if (!t) return;
+      if (!isParticipant(t, state.actorId) || t.status==="past") return toast("Join to edit");
+      state.modals.addPlace=true;
+      state.draft.placeName=""; state.draft.placeArea=""; state.draft.placeTag="";
+      saveState(); return render();
+    }
+    if (a==="closeAddPlace"){ state.modals.addPlace=false; saveState(); return render(); }
+    if (a==="savePlace"){
+      const name = (state.draft.placeName||"").trim();
+      if (!name) return toast("Name required");
+      addSavedPlace(btn.dataset.trip, { name, area:(state.draft.placeArea||"").trim(), tag:(state.draft.placeTag||"").trim() });
+      state.modals.addPlace=false;
+      saveState(); return render();
+    }
+    if (a==="quickAddPlace") return quickAddPlaceToDay(btn.dataset.trip, btn.dataset.day, btn.dataset.place);
+
+    // People
+    if (a==="simulateJoin") return simulateJoinRequest(btn.dataset.trip);
+    if (a==="requestJoin") return requestToJoinAsActor(btn.dataset.trip);
+    if (a==="approveRequest") return approveRequest(btn.dataset.trip, btn.dataset.req);
+    if (a==="declineRequest") return declineRequest(btn.dataset.trip, btn.dataset.req);
+    if (a==="removeMember") return removeMember(btn.dataset.trip, btn.dataset.user);
+    if (a==="openAddFriend"){ state.modals.addFriend=true; saveState(); return render(); }
+    if (a==="closeAddFriend"){ state.modals.addFriend=false; saveState(); return render(); }
+    if (a==="addFriend"){ addFriendToTrip(btn.dataset.trip, btn.dataset.user); state.modals.addFriend=false; saveState(); return render(); }
+
+    // Wall actions
+    if (a==="likeTrip"){ bumpWallStats(btn.dataset.trip, 1); saveState(); render(); return; }
+    if (a==="openComments"){ state.modals.comments=true; state.draft.commentsTripId = btn.dataset.trip; state.draft.commentText=""; saveState(); render(); return; }
+    if (a==="closeComments"){ state.modals.comments=false; saveState(); render(); return; }
+    if (a==="sendComment"){ addWallComment(btn.dataset.trip, state.draft.commentText||""); state.draft.commentText=""; saveState(); render(); return; }
+
+    // Story tab
+    if (a==="togglePublish"){ togglePublishToWall(btn.dataset.trip, btn.checked); return; }
+    if (a==="saveCover"){
+      const t = tripById(btn.dataset.trip); if (!t) return;
+      const url = (state.draft.coverURL ?? t.cover?.photoURL ?? "").trim();
+      setCoverPhoto(t.id, url);
+      return;
+    }
+    if (a==="postMoment"){
+      const caption = (state.draft.momentCaption||"").trim();
+      if (!caption) return toast("Write something");
+      addStoryMoment(btn.dataset.trip, { type:"text", caption });
+      state.draft.momentCaption="";
+      saveState(); return render();
+    }
+    if (a==="openAddPhoto"){ state.modals.addPhoto=true; state.draft.photoURL=""; state.draft.photoCaption=""; saveState(); return render(); }
+    if (a==="closeAddPhoto"){ state.modals.addPhoto=false; saveState(); return render(); }
+    if (a==="savePhoto"){
+      const url = (state.draft.photoURL||"").trim();
+      if (!url) return toast("URL required");
+      addStoryPhoto(btn.dataset.trip, url, state.draft.photoCaption||"");
+      state.modals.addPhoto=false;
+      state.draft.photoURL=""; state.draft.photoCaption="";
+      saveState(); return render();
+    }
+
+    // Chat
+    if (a==="sendChat"){
+      const msg = (state.draft.chatText||"").trim();
+      if (!msg) return;
+      sendChat(btn.dataset.trip, msg);
+      state.draft.chatText="";
+      saveState(); return render();
+    }
+
+    // Modal generic close
+    if (a==="closeModal"){
+      // close all
+      for (const k of Object.keys(state.modals)) state.modals[k]=false;
+      saveState(); return render();
+    }
+  });
+
+  // Inputs (simple binding)
+  document.addEventListener("input", (e)=>{
+    const bind = e.target.getAttribute("data-bind");
+    if (!bind) return;
+    if (e.target.type === "checkbox"){
+      state.draft[bind] = e.target.checked;
+    }else{
+      state.draft[bind] = e.target.value;
+    }
+    saveState();
+  });
+
+  // Actor switch
+  document.addEventListener("change", (e)=>{
+    const a = e.target.closest("[data-action='setActor']");
+    if (!a) return;
+    state.actorId = e.target.value;
+    saveState(); render();
+  });
+
+  // Drag handlers are global functions called from attributes
+  window.onDragStart = onDragStart;
+  window.onDragEnd = onDragEnd;
+  window.onDragOver = onDragOver;
+  window.onDrop = onDrop;
+}
+
+/* ---------- Render root ---------- */
+function render(){
+  const app = document.getElementById("app");
+  if (!app) return;
+
+  let inner = "";
+  if (state.screen==="home") inner = HomeScreen();
+  else if (state.screen==="create") inner = CreateScreen();
+  else if (state.screen==="trip") inner = TripScreen();
+  else if (state.screen==="storyView") inner = StoryViewScreen();
+  else inner = HomeScreen();
+
+  app.innerHTML = AppShell(inner);
+
+  // update fake time
+  const st = document.getElementById("statusTime");
+  if (st){
+    const d = new Date();
+    st.textContent = `${d.getHours()%12||12}:${pad2(d.getMinutes())}`;
+  }
+
+  // activate icons
+  if (window.lucide) window.lucide.createIcons();
+}
+wireEvents();
+render();
+</script>
+
+</body>
+</html>
