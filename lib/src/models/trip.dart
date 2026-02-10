@@ -863,6 +863,135 @@ class ChecklistItem {
   }
 }
 
+enum ChatMessageKind { user, system }
+
+enum ChatItemType { itinerary, checklist }
+
+class ChatItemReference {
+  final ChatItemType type;
+  final String itemId;
+  final String title;
+  final String? subtitle;
+  final DateTime? dateTime;
+  final String? section;
+  final String? link;
+  final bool? isShared;
+
+  const ChatItemReference({
+    required this.type,
+    required this.itemId,
+    required this.title,
+    this.subtitle,
+    this.dateTime,
+    this.section,
+    this.link,
+    this.isShared,
+  });
+
+  Map<String, dynamic> toJson() {
+    final data = <String, dynamic>{
+      'type': type.name,
+      'itemId': itemId,
+      'title': title,
+    };
+    if (subtitle != null) data['subtitle'] = subtitle;
+    if (dateTime != null) data['dateTime'] = dateTime!.toIso8601String();
+    if (section != null) data['section'] = section;
+    if (link != null) data['link'] = link;
+    if (isShared != null) data['isShared'] = isShared;
+    return data;
+  }
+
+  factory ChatItemReference.fromJson(Map<String, dynamic> data) {
+    return ChatItemReference(
+      type: ChatItemType.values.firstWhere(
+        (entry) => entry.name == (data['type'] as String?),
+        orElse: () => ChatItemType.itinerary,
+      ),
+      itemId: data['itemId'] as String? ?? '',
+      title: data['title'] as String? ?? '',
+      subtitle: data['subtitle'] as String?,
+      dateTime: data['dateTime'] == null
+          ? null
+          : _parseTimestamp(data['dateTime']),
+      section: data['section'] as String?,
+      link: data['link'] as String?,
+      isShared: data['isShared'] as bool?,
+    );
+  }
+}
+
+class ChatMessage {
+  final String id;
+  final String authorId;
+  final String text;
+  final DateTime createdAt;
+  final ChatMessageKind kind;
+  final List<String> mentions;
+  final List<ChatItemReference> itemRefs;
+  final String? replyToMessageId;
+  final Map<String, List<String>> reactions;
+
+  const ChatMessage({
+    required this.id,
+    required this.authorId,
+    required this.text,
+    required this.createdAt,
+    this.kind = ChatMessageKind.user,
+    this.mentions = const [],
+    this.itemRefs = const [],
+    this.replyToMessageId,
+    this.reactions = const {},
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'authorId': authorId,
+      'text': text,
+      'createdAt': createdAt.toIso8601String(),
+      'kind': kind.name,
+      'mentions': mentions,
+      'itemRefs': itemRefs.map((ref) => ref.toJson()).toList(),
+      'replyToMessageId': replyToMessageId,
+      'reactions': reactions,
+    };
+  }
+
+  factory ChatMessage.fromJson(Map<String, dynamic> data) {
+    final mentionsRaw = data['mentions'];
+    final itemRefsRaw = data['itemRefs'];
+    final reactionsRaw = data['reactions'];
+    return ChatMessage(
+      id: data['id'] as String? ?? '',
+      authorId: data['authorId'] as String? ?? '',
+      text: data['text'] as String? ?? '',
+      createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
+      kind: ChatMessageKind.values.firstWhere(
+        (entry) => entry.name == (data['kind'] as String?),
+        orElse: () => ChatMessageKind.user,
+      ),
+      mentions: mentionsRaw is List
+          ? mentionsRaw.whereType<String>().toList()
+          : const [],
+      itemRefs: itemRefsRaw is List
+          ? itemRefsRaw
+              .whereType<Map<String, dynamic>>()
+              .map(ChatItemReference.fromJson)
+              .toList()
+          : const [],
+      replyToMessageId: data['replyToMessageId'] as String?,
+      reactions: reactionsRaw is Map
+          ? reactionsRaw.map(
+              (key, value) => MapEntry(
+                key.toString(),
+                value is List ? value.whereType<String>().toList() : <String>[],
+              ),
+            )
+          : const {},
+    );
+  }
+}
 class JoinRequest {
   final String id;
   final String userId;
@@ -908,38 +1037,6 @@ class JoinRequest {
         orElse: () => JoinRequestStatus.pending,
       ),
       createdAt: _parseTimestamp(data['createdAt']),
-    );
-  }
-}
-
-class ChatMessage {
-  final String id;
-  final String authorId;
-  final String text;
-  final DateTime createdAt;
-
-  const ChatMessage({
-    required this.id,
-    required this.authorId,
-    required this.text,
-    required this.createdAt,
-  });
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'authorId': authorId,
-      'text': text,
-      'createdAt': createdAt.toIso8601String(),
-    };
-  }
-
-  factory ChatMessage.fromJson(Map<String, dynamic> data) {
-    return ChatMessage(
-      id: data['id'] as String? ?? '',
-      authorId: data['authorId'] as String? ?? '',
-      text: data['text'] as String? ?? '',
-      createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
     );
   }
 }

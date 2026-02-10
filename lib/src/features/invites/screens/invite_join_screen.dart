@@ -1,65 +1,56 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
 import 'package:flutter_application_trial/src/utils/invite_utils.dart';
-import 'package:flutter_application_trial/src/features/trips/screens/trip_detail_screen.dart';
 import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 import 'package:flutter_application_trial/src/widgets/primary_button.dart';
 
-enum _InviteJoinStatus {
-  ready,
-  invalid,
-  expired,
-  used,
-  tripDeleted,
-  network,
-}
+enum _InviteJoinStatus { ready, invalid, expired, used, tripDeleted, network }
 
-final _inviteJoinProvider = FutureProvider.family<_InviteJoinData, String>(
-  (ref, token) async {
-    final repo = ref.read(repositoryProvider);
-    try {
-      final invite = await repo.getInviteByToken(token);
-      if (invite == null) {
-        return const _InviteJoinData(status: _InviteJoinStatus.invalid);
-      }
-      if (invite.isUsed) {
-        return _InviteJoinData(
-          status: _InviteJoinStatus.used,
-          invite: invite,
-        );
-      }
-      if (DateTime.now().isAfter(invite.expiresAt)) {
-        return _InviteJoinData(
-          status: _InviteJoinStatus.expired,
-          invite: invite,
-        );
-      }
-      final trip = await repo.getTripById(invite.tripId);
-      if (trip == null) {
-        return _InviteJoinData(
-          status: _InviteJoinStatus.tripDeleted,
-          invite: invite,
-        );
-      }
-      final session = ref.read(authSessionProvider).value;
-      final isMember = session != null &&
-          trip.members.any((member) => member.userId == session.userId);
-      return _InviteJoinData(
-        status: _InviteJoinStatus.ready,
-        invite: invite,
-        trip: trip,
-        hostName: _hostNameForTrip(trip),
-        isMember: isMember,
-      );
-    } catch (_) {
-      return const _InviteJoinData(status: _InviteJoinStatus.network);
+final _inviteJoinProvider = FutureProvider.family<_InviteJoinData, String>((
+  ref,
+  token,
+) async {
+  final repo = ref.read(repositoryProvider);
+  try {
+    final invite = await repo.getInviteByToken(token);
+    if (invite == null) {
+      return const _InviteJoinData(status: _InviteJoinStatus.invalid);
     }
-  },
-);
+    if (invite.isUsed) {
+      return _InviteJoinData(status: _InviteJoinStatus.used, invite: invite);
+    }
+    if (DateTime.now().isAfter(invite.expiresAt)) {
+      return _InviteJoinData(status: _InviteJoinStatus.expired, invite: invite);
+    }
+    final trip = await repo.getTripById(invite.tripId);
+    if (trip == null) {
+      return _InviteJoinData(
+        status: _InviteJoinStatus.tripDeleted,
+        invite: invite,
+      );
+    }
+    final session = ref.read(authSessionProvider).value;
+    final isMember =
+        session != null &&
+        trip.members.any((member) => member.userId == session.userId);
+    return _InviteJoinData(
+      status: _InviteJoinStatus.ready,
+      invite: invite,
+      trip: trip,
+      hostName: _hostNameForTrip(trip),
+      isMember: isMember,
+    );
+  } catch (_) {
+    return const _InviteJoinData(status: _InviteJoinStatus.network);
+  }
+});
 
 class InviteJoinScreen extends ConsumerStatefulWidget {
   final String inviteInput;
@@ -86,6 +77,12 @@ class _InviteJoinScreenState extends ConsumerState<InviteJoinScreen> {
     if (_token == null) {
       _inputError = 'Paste a valid invite link or token.';
     }
+    final pending = ref.read(pendingInviteTokenProvider);
+    final session = ref.read(authSessionProvider).value;
+    if (session != null && pending != null && pending == _token) {
+      ref.read(pendingInviteTokenProvider.notifier).state = null;
+      unawaited(InviteTokenStore.clearPendingToken());
+    }
   }
 
   @override
@@ -98,7 +95,7 @@ class _InviteJoinScreenState extends ConsumerState<InviteJoinScreen> {
   Widget build(BuildContext context) {
     return AppScaffold(
       title: 'Join Trip',
-      onHome: () => Navigator.of(context).popUntil((route) => route.isFirst),
+      onHome: () => context.go('/home'),
       padding: EdgeInsets.zero,
       body: _showManualEntry
           ? _InviteInputState(
@@ -178,7 +175,9 @@ class _InviteJoinScreenState extends ConsumerState<InviteJoinScreen> {
     final token = parseInviteTokenFromText(_inputController.text);
     setState(() {
       _token = token;
-      _inputError = token == null ? 'Paste a valid invite link or token.' : null;
+      _inputError = token == null
+          ? 'Paste a valid invite link or token.'
+          : null;
       if (token != null) {
         _showManualEntry = false;
       }
@@ -234,14 +233,12 @@ class _InviteJoinScreenState extends ConsumerState<InviteJoinScreen> {
         ref.invalidate(tripByIdProvider(data.trip!.id));
         ref.invalidate(userTripsProvider);
         if (!mounted) return;
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => TripDetailScreen(tripId: data.trip!.id),
-          ),
-        );
+        ref.read(pendingInviteTokenProvider.notifier).state = null;
+        unawaited(InviteTokenStore.clearPendingToken());
+        context.go('/trips/${data.trip!.id}?tab=planner');
         showGuardedSnackBar(context, 'You joined the trip.');
       },
+      operation: 'join_trip',
       errorMessage: 'Unable to join the trip.',
     );
     if (mounted) {
@@ -275,16 +272,11 @@ class _InviteJoinScreenState extends ConsumerState<InviteJoinScreen> {
   }
 
   void _goHome() {
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    context.go('/home');
   }
 
   void _openTrip(String tripId) {
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => TripDetailScreen(tripId: tripId),
-      ),
-    );
+    context.go('/trips/$tripId?tab=planner');
   }
 }
 
@@ -332,11 +324,7 @@ class _InvitePreview extends StatelessWidget {
           ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
         ),
         const SizedBox(height: 16),
-        _InfoRow(
-          icon: Icons.person_outline,
-          title: 'Host',
-          value: hostName,
-        ),
+        _InfoRow(icon: Icons.person_outline, title: 'Host', value: hostName),
         const SizedBox(height: 10),
         _InfoRow(
           icon: Icons.verified_user_outlined,
@@ -410,10 +398,7 @@ class _AlreadyMemberState extends StatelessWidget {
   final VoidCallback onOpen;
   final VoidCallback onClose;
 
-  const _AlreadyMemberState({
-    required this.onOpen,
-    required this.onClose,
-  });
+  const _AlreadyMemberState({required this.onOpen, required this.onClose});
 
   @override
   Widget build(BuildContext context) {
@@ -438,10 +423,7 @@ class _AlreadyMemberState extends StatelessWidget {
                 child: const Text('Open trip'),
               ),
             ),
-            TextButton(
-              onPressed: onClose,
-              child: const Text('Close'),
-            ),
+            TextButton(onPressed: onClose, child: const Text('Close')),
           ],
         ),
       ),
@@ -489,10 +471,7 @@ class _InviteInputState extends StatelessWidget {
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
-              child: PrimaryButton(
-                label: 'Continue',
-                onPressed: onContinue,
-              ),
+              child: PrimaryButton(label: 'Continue', onPressed: onContinue),
             ),
             if (onCancel != null) ...[
               const SizedBox(height: 8),
@@ -550,10 +529,7 @@ class _InviteProblemState extends StatelessWidget {
                 child: Text(primaryLabel),
               ),
             ),
-            TextButton(
-              onPressed: onSecondary,
-              child: Text(secondaryLabel),
-            ),
+            TextButton(onPressed: onSecondary, child: Text(secondaryLabel)),
           ],
         ),
       ),
@@ -660,9 +636,9 @@ class _MemberPreview extends StatelessWidget {
               backgroundColor: const Color(0xFFE2E8F0),
               child: Text(
                 _initials(member.name),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w700),
               ),
             ),
           ),

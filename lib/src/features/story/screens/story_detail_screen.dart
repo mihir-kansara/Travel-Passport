@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:uuid/uuid.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
 import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
+import 'package:flutter_application_trial/src/widgets/empty_state_card.dart';
+import 'package:flutter_application_trial/src/widgets/async_state_view.dart';
 
 class StoryDetailScreen extends ConsumerStatefulWidget {
   final String tripId;
@@ -18,6 +21,7 @@ class StoryDetailScreen extends ConsumerStatefulWidget {
 
 class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
   final TextEditingController _commentController = TextEditingController();
+  final FocusNode _commentFocusNode = FocusNode();
   bool _isLiking = false;
   bool _isSendingComment = false;
   bool? _likeOverride;
@@ -25,7 +29,12 @@ class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
   @override
   void dispose() {
     _commentController.dispose();
+    _commentFocusNode.dispose();
     super.dispose();
+  }
+
+  void _openTripStory() {
+    context.go('/trips/${widget.tripId}?tab=story');
   }
 
   @override
@@ -50,7 +59,7 @@ class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
 
     return AppScaffold(
       title: 'Trip Story',
-      onHome: () => Navigator.of(context).popUntil((route) => route.isFirst),
+      onHome: () => context.go('/home'),
       padding: EdgeInsets.zero,
       body: storyAsync.when(
         data: (payload) {
@@ -67,6 +76,8 @@ class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
             coverGradientId: payload.coverGradientId,
             comments: commentsAsync.value ?? const [],
             commentController: _commentController,
+            commentFocusNode: _commentFocusNode,
+            onOpenTripStory: _openTripStory,
             onLike: _isLiking
                 ? null
                 : () => _handleLike(payload.story, payload.storyId),
@@ -77,8 +88,11 @@ class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
             likeCount: likeCount,
           );
         },
-        loading: () => const _StoryDetailLoading(),
-        error: (e, st) => _AsyncErrorState(
+        loading: () => const AsyncLoadingView.list(
+          itemCount: 5,
+          itemHeight: 120,
+        ),
+        error: (e, st) => AsyncErrorView(
           message: 'Unable to load this story.',
           onRetry: () => ref.refresh(tripStreamProvider(widget.tripId)),
         ),
@@ -123,14 +137,10 @@ class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
     final previousLiked = _isTripLiked(story, session.userId);
     final nextLiked = !previousLiked;
     setState(() => _likeOverride = nextLiked);
-    final success = await runGuarded(
-      context,
-      () async {
-        final repo = ref.read(repositoryProvider);
-        await repo.setTripLike(tripId, nextLiked);
-      },
-      errorMessage: 'Unable to update like.',
-    );
+    final success = await runGuarded(context, () async {
+      final repo = ref.read(repositoryProvider);
+      await repo.setTripLike(tripId, nextLiked);
+    }, errorMessage: 'Unable to update like.');
     if (!mounted) return;
     if (!success) {
       setState(() => _likeOverride = previousOverride);
@@ -158,21 +168,17 @@ class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
       if (mounted) setState(() => _isSendingComment = false);
       return;
     }
-    final success = await runGuarded(
-      context,
-      () async {
-        final repo = ref.read(repositoryProvider);
-        final comment = WallComment(
-          id: const Uuid().v4(),
-          authorId: session.userId,
-          text: text,
-          createdAt: DateTime.now(),
-        );
-        await repo.addWallComment(tripId, comment);
-        _commentController.clear();
-      },
-      errorMessage: 'Unable to send comment.',
-    );
+    final success = await runGuarded(context, () async {
+      final repo = ref.read(repositoryProvider);
+      final comment = WallComment(
+        id: const Uuid().v4(),
+        authorId: session.userId,
+        text: text,
+        createdAt: DateTime.now(),
+      );
+      await repo.addWallComment(tripId, comment);
+      _commentController.clear();
+    }, errorMessage: 'Unable to send comment.');
     if (!mounted) return;
     if (!success && _commentController.text.isEmpty) {
       _commentController.text = text;
@@ -207,6 +213,8 @@ class _StoryDetailBody extends StatelessWidget {
   final int? coverGradientId;
   final List<WallComment> comments;
   final TextEditingController commentController;
+  final FocusNode commentFocusNode;
+  final VoidCallback onOpenTripStory;
   final VoidCallback? onLike;
   final VoidCallback? onSendComment;
   final bool isLiked;
@@ -220,6 +228,8 @@ class _StoryDetailBody extends StatelessWidget {
     required this.coverGradientId,
     required this.comments,
     required this.commentController,
+    required this.commentFocusNode,
+    required this.onOpenTripStory,
     required this.onLike,
     required this.onSendComment,
     required this.isLiked,
@@ -252,9 +262,7 @@ class _StoryDetailBody extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         Text(
-          story.headline.isNotEmpty
-              ? story.headline
-              : '$destination passport',
+          story.headline.isNotEmpty ? story.headline : '$destination passport',
           style: Theme.of(
             context,
           ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
@@ -299,10 +307,12 @@ class _StoryDetailBody extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         if (moments.isEmpty)
-          const _InlineEmptyState(
+          _InlineEmptyState(
             title: 'No moments yet',
             subtitle: 'Trip moments will show up here.',
             icon: Icons.auto_awesome_outlined,
+            actionLabel: 'Open trip story',
+            onAction: onOpenTripStory,
           )
         else
           ...moments.map(
@@ -317,10 +327,12 @@ class _StoryDetailBody extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         if (story.photos.isEmpty)
-          const _InlineEmptyState(
+          _InlineEmptyState(
             title: 'No photos yet',
             subtitle: 'Add photos to bring the story to life.',
             icon: Icons.photo_outlined,
+            actionLabel: 'Open trip story',
+            onAction: onOpenTripStory,
           )
         else
           Wrap(
@@ -339,10 +351,12 @@ class _StoryDetailBody extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         if (comments.isEmpty)
-          const _InlineEmptyState(
+          _InlineEmptyState(
             title: 'No comments yet',
             subtitle: 'Be the first to react to this story.',
             icon: Icons.chat_bubble_outline,
+            actionLabel: 'Write a comment',
+            onAction: () => commentFocusNode.requestFocus(),
           )
         else
           ...comments.map(
@@ -354,14 +368,9 @@ class _StoryDetailBody extends StatelessWidget {
             Expanded(
               child: TextField(
                 controller: commentController,
-                decoration: InputDecoration(
+                focusNode: commentFocusNode,
+                decoration: const InputDecoration(
                   hintText: 'Write a comment...',
-                  filled: true,
-                  fillColor: const Color(0xFFF8FAFC),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
                 ),
               ),
             ),
@@ -524,130 +533,29 @@ class _InlineEmptyState extends StatelessWidget {
   final String title;
   final String subtitle;
   final IconData icon;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   const _InlineEmptyState({
     required this.title,
     required this.subtitle,
     required this.icon,
+    this.actionLabel,
+    this.onAction,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            height: 42,
-            width: 42,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: const Color(0xFF4F46E5)),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF64748B),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return EmptyStateCard(
+      title: title,
+      subtitle: subtitle,
+      icon: icon,
+      actionLabel: actionLabel,
+      onAction: onAction,
     );
   }
 }
 
-class _AsyncErrorState extends StatelessWidget {
-  final String message;
-  final VoidCallback onRetry;
-
-  const _AsyncErrorState({required this.message, required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.error_outline, size: 44, color: Colors.red[400]),
-            const SizedBox(height: 12),
-            Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Retry'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StoryDetailLoading extends StatelessWidget {
-  const _StoryDetailLoading();
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        _LoadingBox(height: 200),
-        const SizedBox(height: 16),
-        _LoadingBox(height: 22, width: 220),
-        const SizedBox(height: 12),
-        _LoadingBox(height: 14, width: 180),
-        const SizedBox(height: 24),
-        _LoadingBox(height: 120),
-        const SizedBox(height: 12),
-        _LoadingBox(height: 120),
-      ],
-    );
-  }
-}
-
-class _LoadingBox extends StatelessWidget {
-  final double height;
-  final double? width;
-
-  const _LoadingBox({required this.height, this.width});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: height,
-      width: width,
-      decoration: BoxDecoration(
-        color: const Color(0xFFE2E8F0),
-        borderRadius: BorderRadius.circular(16),
-      ),
-    );
-  }
-}
 
 class _Avatar extends StatelessWidget {
   final String initials;

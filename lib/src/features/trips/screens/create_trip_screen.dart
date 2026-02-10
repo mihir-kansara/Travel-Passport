@@ -3,13 +3,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
-import 'package:flutter_application_trial/src/features/trips/screens/trip_detail_screen.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
 import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 import 'package:flutter_application_trial/src/widgets/primary_button.dart';
@@ -101,7 +101,7 @@ class _CreateTripScreenState extends ConsumerState<CreateTripScreen> {
   Widget build(BuildContext context) {
     return AppScaffold(
       title: 'Create Trip',
-      onHome: () => Navigator.of(context).popUntil((route) => route.isFirst),
+      onHome: () => context.go('/home'),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -126,8 +126,8 @@ class _CreateTripScreenState extends ConsumerState<CreateTripScreen> {
         ? 'Pick dates'
         : '${DateFormat('MMM d').format(_dateRange!.start)} - '
               '${DateFormat('MMM d').format(_dateRange!.end)}';
-    final destinationError = _showValidation &&
-            _destinationController.text.trim().isEmpty
+    final destinationError =
+        _showValidation && _destinationController.text.trim().isEmpty
         ? 'Destination is required.'
         : null;
     String? dateError;
@@ -495,15 +495,16 @@ class _CreateTripScreenState extends ConsumerState<CreateTripScreen> {
           visibility: _visibility,
         );
         if (!mounted) return;
+        await ref
+            .read(appAnalyticsProvider)
+            .logCreateTrip(tripId: trip.id, visibility: _visibility.name);
         await _saveRecentDestination(destination);
         if (!mounted) return;
         showGuardedSnackBar(context, 'Trip created 🎉');
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => TripDetailScreen(tripId: trip.id)),
-        );
+        context.go('/trips/${trip.id}?tab=planner');
         ref.invalidate(userTripsProvider);
       },
+      operation: 'create_trip',
       errorMessage: 'Unable to create trip.',
     );
     if (mounted) {
@@ -511,7 +512,6 @@ class _CreateTripScreenState extends ConsumerState<CreateTripScreen> {
     }
     if (!success) return;
   }
-
 }
 
 class _StepHeader extends StatelessWidget {

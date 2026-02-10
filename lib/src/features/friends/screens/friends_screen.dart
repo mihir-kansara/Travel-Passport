@@ -6,7 +6,8 @@ import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/repositories/repository.dart';
 import 'package:flutter_application_trial/src/widgets/empty_state_card.dart';
-import 'package:flutter_application_trial/src/widgets/loading_placeholder.dart';
+import 'package:flutter_application_trial/src/widgets/primary_button.dart';
+import 'package:flutter_application_trial/src/widgets/async_state_view.dart';
 import 'package:intl/intl.dart';
 
 class FriendsScreen extends ConsumerStatefulWidget {
@@ -19,6 +20,7 @@ class FriendsScreen extends ConsumerStatefulWidget {
 class _FriendsScreenState extends ConsumerState<FriendsScreen>
     with SingleTickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
   DateTime? _lastRequestAt;
   final Map<String, DateTime> _lastRequestByUser = {};
@@ -26,7 +28,12 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
   @override
   void dispose() {
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
+  }
+
+  void _focusSearch() {
+    _searchFocusNode.requestFocus();
   }
 
   @override
@@ -52,120 +59,102 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
     final incomingIds = incoming.map((req) => req.fromUserId).toSet();
     final outgoingIds = outgoing.map((req) => req.toUserId).toSet();
 
-    final profileIds = {
-      ...friendIds,
-      ...incomingIds,
-      ...outgoingIds,
-    };
+    final profileIds = {...friendIds, ...incomingIds, ...outgoingIds};
     final profilesAsync = ref.watch(
       userProfilesProvider(profileIds.toList(growable: false)),
     );
     final profiles = profilesAsync.value ?? <String, UserProfile?>{};
 
-    return SafeArea(
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-            child: Row(
+    return Column(
+      children: [
+        const SizedBox(height: 20),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: _FriendsSearchBar(
+            controller: _searchController,
+            focusNode: _searchFocusNode,
+            onChanged: (value) => setState(() => _searchQuery = value),
+            onClear: () => setState(() {
+              _searchController.clear();
+              _searchQuery = '';
+            }),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: DefaultTabController(
+            length: 2,
+            child: Column(
               children: [
-                Expanded(
-                  child: Text(
-                    'Friends',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Refresh',
-                  icon: const Icon(Icons.refresh_outlined),
-                  onPressed: () {
-                    ref.invalidate(friendsProvider);
-                    ref.invalidate(incomingFriendRequestsProvider);
-                    ref.invalidate(outgoingFriendRequestsProvider);
-                  },
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: _FriendsSearchBar(
-              controller: _searchController,
-              onChanged: (value) => setState(() => _searchQuery = value),
-              onClear: () => setState(() {
-                _searchController.clear();
-                _searchQuery = '';
-              }),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: DefaultTabController(
-              length: 2,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(AppRadii.lg),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: TabBar(
+                      isScrollable: true,
+                      tabAlignment: TabAlignment.start,
+                      labelColor: AppColors.text,
+                      unselectedLabelColor: AppColors.mutedText,
+                      indicator: BoxDecoration(
+                          color: AppColors.primarySoft,
                         borderRadius: BorderRadius.circular(AppRadii.lg),
-                        border: Border.all(color: AppColors.border),
                       ),
-                      child: TabBar(
-                        labelColor: AppColors.text,
-                        unselectedLabelColor: AppColors.mutedText,
-                        indicator: BoxDecoration(
-                          color: const Color(0xFFE0E7FF),
-                          borderRadius: BorderRadius.circular(AppRadii.lg),
+                      labelStyle: Theme.of(context).textTheme.labelSmall
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                      tabs: [
+                        const Tab(
+                          child: Text(
+                            'Friends',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                        labelStyle: Theme.of(context)
-                            .textTheme
-                            .labelSmall
-                            ?.copyWith(fontWeight: FontWeight.w800),
-                        tabs: [
-                          const Tab(text: 'Friends'),
-                          Tab(
-                            text: incoming.isNotEmpty
+                        Tab(
+                          child: Text(
+                            incoming.isNotEmpty
                                 ? 'Requests (${incoming.length})'
                                 : 'Requests',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        _buildFriendsTab(
-                          context: context,
-                          currentUserId: currentUserId,
-                          friends: friends,
-                          incoming: incoming,
-                          outgoing: outgoing,
-                          blockedIds: blockedIds,
-                          profiles: profiles,
-                          trips: trips,
-                        ),
-                        _buildRequestsTab(
-                          context: context,
-                          currentUserId: currentUserId,
-                          incoming: incoming,
-                          outgoing: outgoing,
-                          profiles: profiles,
                         ),
                       ],
                     ),
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _buildFriendsTab(
+                        context: context,
+                        currentUserId: currentUserId,
+                        friends: friends,
+                        incoming: incoming,
+                        outgoing: outgoing,
+                        blockedIds: blockedIds,
+                        profiles: profiles,
+                        trips: trips,
+                      ),
+                      _buildRequestsTab(
+                        context: context,
+                        currentUserId: currentUserId,
+                        incoming: incoming,
+                        outgoing: outgoing,
+                        profiles: profiles,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -186,8 +175,9 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
         .toList();
 
     final hasQuery = _searchQuery.trim().length >= 2;
-    final searchAsync =
-        hasQuery ? ref.watch(friendSearchProvider(_searchQuery)) : null;
+    final searchAsync = hasQuery
+        ? ref.watch(friendSearchProvider(_searchQuery))
+        : null;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -206,10 +196,12 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
           )
         else ...[
           if (friends.isEmpty)
-            const EmptyStateCard(
+            EmptyStateCard(
               title: 'No friends yet',
               subtitle: 'Search by username, email, or phone to add friends.',
               icon: Icons.group_outlined,
+              actionLabel: 'Find friends',
+              onAction: _focusSearch,
             )
           else
             ...friendIds.map((friendId) {
@@ -217,22 +209,20 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
               if (profile == null) {
                 return const _FriendCardPlaceholder();
               }
-              final mutualCount =
-                  _mutualTripCount(trips, currentUserId, friendId);
-              final lastTrip =
-                  _lastMutualTrip(trips, currentUserId, friendId);
+              final mutualCount = _mutualTripCount(
+                trips,
+                currentUserId,
+                friendId,
+              );
+              final lastTrip = _lastMutualTrip(trips, currentUserId, friendId);
               final subtitle = _friendSubtitle(profile, mutualCount, lastTrip);
 
               return _FriendCard(
                 profile: profile,
                 subtitle: subtitle,
                 mutualTripsCount: mutualCount,
-                onInvite: () => _openTripPicker(
-                  context,
-                  profile,
-                  trips,
-                  currentUserId,
-                ),
+                onInvite: () =>
+                    _openTripPicker(context, profile, trips, currentUserId),
                 onRemove: () => repo.removeFriend(profile.userId),
                 onBlock: () => repo.blockUser(profile.userId),
               );
@@ -277,19 +267,27 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
             .toList();
 
         if (visible.isEmpty) {
-          return const EmptyStateCard(
+          return EmptyStateCard(
             title: 'No matches yet',
             subtitle: 'Try searching by email, phone, or handle.',
             icon: Icons.search_off_outlined,
+            actionLabel: 'Edit search',
+            onAction: _focusSearch,
           );
         }
 
         return Column(
           children: visible.map((profile) {
-            final mutualCount =
-                _mutualTripCount(trips, currentUserId, profile.userId);
-            final lastTrip =
-                _lastMutualTrip(trips, currentUserId, profile.userId);
+            final mutualCount = _mutualTripCount(
+              trips,
+              currentUserId,
+              profile.userId,
+            );
+            final lastTrip = _lastMutualTrip(
+              trips,
+              currentUserId,
+              profile.userId,
+            );
             final subtitle = _friendSubtitle(profile, mutualCount, lastTrip);
             final isFriend = friendIds.contains(profile.userId);
             final isIncoming = incomingIds.contains(profile.userId);
@@ -310,7 +308,8 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
                       onPressed: () => repo.respondToFriendRequest(
                         incoming
                             .firstWhere(
-                                (req) => req.fromUserId == profile.userId)
+                              (req) => req.fromUserId == profile.userId,
+                            )
                             .id,
                         FriendRequestStatus.accepted,
                       ),
@@ -334,11 +333,13 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
           }).toList(),
         );
       },
-      loading: () => const LoadingPlaceholder(itemCount: 3, itemHeight: 88),
-      error: (e, st) => const EmptyStateCard(
-        title: 'Search error',
-        subtitle: 'We could not load results. Try again in a moment.',
-        icon: Icons.error_outline,
+      loading: () => const AsyncLoadingView.list(
+        itemCount: 3,
+        itemHeight: 88,
+      ),
+      error: (e, st) => AsyncErrorView(
+        message: 'We could not load results. Try again in a moment.',
+        onRetry: () => ref.invalidate(friendSearchProvider(_searchQuery)),
       ),
     );
   }
@@ -370,11 +371,13 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
     }
 
     final suggestions = candidateIds
-        .where((id) =>
-            !friendIds.contains(id) &&
-            !incomingIds.contains(id) &&
-            !outgoingIds.contains(id) &&
-            !blockedIds.contains(id))
+        .where(
+          (id) =>
+              !friendIds.contains(id) &&
+              !incomingIds.contains(id) &&
+              !outgoingIds.contains(id) &&
+              !blockedIds.contains(id),
+        )
         .toList();
 
     if (suggestions.isEmpty) return const SizedBox.shrink();
@@ -387,9 +390,9 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
       children: [
         Text(
           'Suggested from your trips',
-          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 8),
         profilesAsync.when(
@@ -397,12 +400,21 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
             final items = profiles.values.whereType<UserProfile>().toList();
             return Column(
               children: items.map((profile) {
-                final mutualCount =
-                    _mutualTripCount(trips, currentUserId, profile.userId);
-                final lastTrip =
-                    _lastMutualTrip(trips, currentUserId, profile.userId);
-                final subtitle =
-                    _friendSubtitle(profile, mutualCount, lastTrip);
+                final mutualCount = _mutualTripCount(
+                  trips,
+                  currentUserId,
+                  profile.userId,
+                );
+                final lastTrip = _lastMutualTrip(
+                  trips,
+                  currentUserId,
+                  profile.userId,
+                );
+                final subtitle = _friendSubtitle(
+                  profile,
+                  mutualCount,
+                  lastTrip,
+                );
                 return _FriendCard(
                   profile: profile,
                   subtitle: subtitle,
@@ -415,7 +427,10 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
               }).toList(),
             );
           },
-          loading: () => const LoadingPlaceholder(itemCount: 2, itemHeight: 88),
+          loading: () => const AsyncLoadingView.list(
+            itemCount: 2,
+            itemHeight: 88,
+          ),
           error: (e, st) => const SizedBox.shrink(),
         ),
       ],
@@ -436,16 +451,18 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
       children: [
         Text(
           'Pending requests',
-          style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+          style: Theme.of(
+            context,
+          ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 8),
         if (incoming.isEmpty && outgoing.isEmpty)
-          const EmptyStateCard(
+          EmptyStateCard(
             title: 'No pending requests',
             subtitle: 'Friend requests will show up here.',
             icon: Icons.mail_outline,
+            actionLabel: 'Search friends',
+            onAction: _focusSearch,
           )
         else ...[
           if (incoming.isNotEmpty)
@@ -455,9 +472,9 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
                 Text(
                   'Incoming',
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: AppColors.mutedText,
-                        fontWeight: FontWeight.w700,
-                      ),
+                    color: AppColors.mutedText,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 ...incoming.map((request) {
@@ -496,9 +513,9 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
             Text(
               'Outgoing',
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: AppColors.mutedText,
-                    fontWeight: FontWeight.w700,
-                  ),
+                color: AppColors.mutedText,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 6),
             ...outgoing.map((request) {
@@ -566,7 +583,7 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
     await showModalBottomSheet<void>(
       context: context,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadii.lg)),
       ),
       builder: (sheetContext) {
         return SafeArea(
@@ -579,19 +596,20 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
                 Text(
                   'Invite to a trip',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Flexible(
                   child: ListView.separated(
                     shrinkWrap: true,
                     itemCount: trips.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    separatorBuilder: (_, index) => const SizedBox(height: 8),
                     itemBuilder: (_, index) {
                       final trip = trips[index];
-                        final isMember = trip.members
-                          .any((member) => member.userId == profile.userId);
+                      final isMember = trip.members.any(
+                        (member) => member.userId == profile.userId,
+                      );
                       return Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
@@ -610,30 +628,28 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
                                     style: Theme.of(context)
                                         .textTheme
                                         .labelLarge
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.w800,
-                                        ),
+                                        ?.copyWith(fontWeight: FontWeight.w800),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    _formatDateRange(trip.startDate, trip.endDate),
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(
-                                          color: AppColors.mutedText,
-                                        ),
+                                    _formatDateRange(
+                                      trip.startDate,
+                                      trip.endDate,
+                                    ),
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(color: AppColors.mutedText),
                                   ),
                                 ],
                               ),
                             ),
                             const SizedBox(width: 12),
-                            ElevatedButton(
+                            PrimaryButton(
+                              label: isMember ? 'Added' : 'Invite',
+                              isCompact: true,
                               onPressed: isMember
                                   ? null
                                   : () {
-                                      final repo =
-                                          ref.read(repositoryProvider);
+                                      final repo = ref.read(repositoryProvider);
                                       repo.addMember(
                                         trip.id,
                                         Member(
@@ -647,7 +663,6 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
                                       );
                                       Navigator.of(sheetContext).pop();
                                     },
-                              child: Text(isMember ? 'Added' : 'Invite'),
                             ),
                           ],
                         ),
@@ -665,28 +680,28 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
 
   int _mutualTripCount(List<Trip> trips, String me, String friendId) {
     return trips
-        .where((trip) =>
-            trip.members.any((member) => member.userId == me) &&
-            trip.members.any((member) => member.userId == friendId))
+        .where(
+          (trip) =>
+              trip.members.any((member) => member.userId == me) &&
+              trip.members.any((member) => member.userId == friendId),
+        )
         .length;
   }
 
   Trip? _lastMutualTrip(List<Trip> trips, String me, String friendId) {
     final mutual = trips
-        .where((trip) =>
-            trip.members.any((member) => member.userId == me) &&
-            trip.members.any((member) => member.userId == friendId))
+        .where(
+          (trip) =>
+              trip.members.any((member) => member.userId == me) &&
+              trip.members.any((member) => member.userId == friendId),
+        )
         .toList();
     if (mutual.isEmpty) return null;
     mutual.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return mutual.first;
   }
 
-  String _friendSubtitle(
-    UserProfile profile,
-    int mutualCount,
-    Trip? lastTrip,
-  ) {
+  String _friendSubtitle(UserProfile profile, int mutualCount, Trip? lastTrip) {
     final handle = profile.handle != null && profile.handle!.isNotEmpty
         ? '@${profile.handle}'
         : null;
@@ -726,11 +741,13 @@ class _FriendsScreenState extends ConsumerState<FriendsScreen>
 
 class _FriendsSearchBar extends StatelessWidget {
   final TextEditingController controller;
+  final FocusNode focusNode;
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
 
   const _FriendsSearchBar({
     required this.controller,
+    required this.focusNode,
     required this.onChanged,
     required this.onClear,
   });
@@ -739,22 +756,14 @@ class _FriendsSearchBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return TextField(
       controller: controller,
+      focusNode: focusNode,
       onChanged: onChanged,
       decoration: InputDecoration(
         hintText: 'Search by username, email, or phone',
         prefixIcon: const Icon(Icons.search),
         suffixIcon: controller.text.isEmpty
             ? null
-            : IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: onClear,
-              ),
-        filled: true,
-        fillColor: AppColors.surface,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppRadii.lg),
-          borderSide: BorderSide.none,
-        ),
+            : IconButton(icon: const Icon(Icons.close), onPressed: onClear),
       ),
     );
   }
@@ -793,8 +802,9 @@ class _FriendCard extends StatelessWidget {
         children: [
           CircleAvatar(
             radius: 22,
-            backgroundImage:
-                profile.photoUrl != null ? NetworkImage(profile.photoUrl!) : null,
+            backgroundImage: profile.photoUrl != null
+                ? NetworkImage(profile.photoUrl!)
+                : null,
             child: profile.photoUrl == null
                 ? Text(
                     profile.displayName.isEmpty
@@ -810,16 +820,16 @@ class _FriendCard extends StatelessWidget {
               children: [
                 Text(
                   profile.displayName,
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppColors.mutedText,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppColors.mutedText),
                 ),
               ],
             ),
@@ -872,7 +882,10 @@ class _FriendCardPlaceholder extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const CircleAvatar(radius: 22, backgroundColor: AppColors.placeholder),
+          const CircleAvatar(
+            radius: 22,
+            backgroundColor: AppColors.placeholder,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -939,9 +952,9 @@ class _StatusPill extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+        style: Theme.of(
+          context,
+        ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w700),
       ),
     );
   }

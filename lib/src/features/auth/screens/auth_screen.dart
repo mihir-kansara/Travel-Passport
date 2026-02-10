@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 
 class AuthScreen extends StatelessWidget {
@@ -29,12 +31,17 @@ class AuthScreen extends StatelessWidget {
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [Color(0xFFF8FAFC), Color(0xFFE2E8F0)],
+            colors: [AppColors.surfaceAlt, AppColors.background],
           ),
         ),
         child: SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.xl,
+              AppSpacing.lg,
+              AppSpacing.xl,
+              AppSpacing.xxl,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -53,7 +60,7 @@ class AuthScreen extends StatelessWidget {
                 Text(
                   'Save your trips, invite friends, and sync everything across devices.',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: const Color(0xFF64748B),
+                    color: AppColors.mutedText,
                   ),
                 ),
                 const SizedBox(height: 32),
@@ -62,7 +69,7 @@ class AuthScreen extends StatelessWidget {
                   icon: Icons.g_mobiledata,
                   onTap: isLoading ? null : onGoogle,
                   foreground: Colors.white,
-                  background: const Color(0xFF0F172A),
+                  background: AppColors.text,
                 ),
                 const SizedBox(height: 12),
                 _AuthButton(
@@ -70,15 +77,15 @@ class AuthScreen extends StatelessWidget {
                   icon: Icons.apple,
                   onTap: isLoading ? null : onApple,
                   foreground: Colors.white,
-                  background: const Color(0xFF1F2937),
+                  background: AppColors.text,
                 ),
                 const SizedBox(height: 12),
                 _AuthButton(
                   label: 'Continue as guest',
                   icon: Icons.bolt,
                   onTap: isLoading ? null : onDeveloper,
-                  foreground: const Color(0xFF0F172A),
-                  background: const Color(0xFFE2E8F0),
+                  foreground: AppColors.text,
+                  background: AppColors.surfaceAlt,
                 ),
                 if (isLoading) ...[
                   const SizedBox(height: 16),
@@ -89,7 +96,7 @@ class AuthScreen extends StatelessWidget {
                   Text(
                     errorText!,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: const Color(0xFFDC2626),
+                      color: AppColors.danger,
                     ),
                   ),
                 ],
@@ -97,7 +104,7 @@ class AuthScreen extends StatelessWidget {
                 Text(
                   'We only use your profile to personalize the experience. No spam.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF94A3B8),
+                    color: AppColors.subtleText,
                   ),
                 ),
               ],
@@ -129,15 +136,20 @@ class _AuthButton extends StatelessWidget {
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: onTap,
+        onPressed: onTap == null
+            ? null
+            : () {
+                HapticFeedback.lightImpact();
+                onTap?.call();
+              },
         icon: Icon(icon, color: foreground),
         label: Text(label),
         style: ElevatedButton.styleFrom(
           backgroundColor: background,
           foregroundColor: foreground,
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(AppRadii.md),
           ),
         ),
       ),

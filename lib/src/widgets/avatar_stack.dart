@@ -22,7 +22,7 @@ class AvatarStack extends StatelessWidget {
               left: i * (radius * 1.2),
               child: CircleAvatar(
                 radius: radius,
-                backgroundColor: AppColors.border,
+                backgroundColor: AppColors.placeholderAlt,
                 child: Text(
                   visible[i],
                   style: Theme.of(

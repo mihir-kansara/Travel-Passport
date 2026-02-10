@@ -382,6 +382,11 @@ class FirestoreTripRepository implements TripRepository {
       'id': message.id,
       'authorId': message.authorId,
       'text': message.text,
+      'kind': message.kind.name,
+      'mentions': message.mentions,
+      'itemRefs': message.itemRefs.map((ref) => ref.toJson()).toList(),
+      'replyToMessageId': message.replyToMessageId,
+      'reactions': message.reactions,
       'createdAt': preserveTimestamps
           ? Timestamp.fromDate(message.createdAt)
           : FieldValue.serverTimestamp(),
@@ -408,6 +413,21 @@ class FirestoreTripRepository implements TripRepository {
           : FieldValue.serverTimestamp(),
       'createdAtClient': comment.createdAt.toIso8601String(),
     };
+  }
+
+  Future<void> _sendSystemChatMessage(
+    String tripId,
+    String text, {
+    String? actorId,
+  }) async {
+    final message = ChatMessage(
+      id: const Uuid().v4(),
+      authorId: actorId ?? currentUserId,
+      text: text,
+      createdAt: DateTime.now(),
+      kind: ChatMessageKind.system,
+    );
+    await sendChatSystemMessage(tripId, message);
   }
 
   Map<String, dynamic> _itineraryCommentDocData(
@@ -604,12 +624,23 @@ class FirestoreTripRepository implements TripRepository {
     await _saveTrip(
       _withUpdate(updated.copyWith(checklist: updatedChecklist), update),
     );
+    await _sendSystemChatMessage(
+      tripId,
+      '${member.name} joined the trip.',
+      actorId: member.userId,
+    );
   }
 
   @override
   Future<void> removeMember(String tripId, String userId) async {
     final trip = await getTripById(tripId);
     if (trip == null) return;
+    final memberName = trip.members
+        .firstWhere(
+          (m) => m.userId == userId,
+          orElse: () => trip.members.first,
+        )
+        .name;
     final updatedChecklist = _removePersonalChecklist(trip.checklist, userId);
     await _saveTrip(
       trip.copyWith(
@@ -617,6 +648,11 @@ class FirestoreTripRepository implements TripRepository {
         checklist: updatedChecklist,
         updatedAt: DateTime.now(),
       ),
+    );
+    await _sendSystemChatMessage(
+      tripId,
+      '$memberName left the trip.',
+      actorId: userId,
     );
   }
 
@@ -688,6 +724,12 @@ class FirestoreTripRepository implements TripRepository {
           kind: TripUpdateKind.planner,
         ),
       );
+      await _sendSystemChatMessage(
+        tripId,
+        existing.exists
+            ? 'Updated itinerary: ${nextItem.title}.'
+            : 'Added to itinerary: ${nextItem.title}.',
+      );
       return nextItem;
     } catch (e) {
       await _enqueuePending(
@@ -722,6 +764,9 @@ class FirestoreTripRepository implements TripRepository {
   Future<void> deleteItineraryItem(String tripId, String itemId) async {
     await _flushPendingOps();
     try {
+      final existing = await _itineraryCollection(tripId).doc(itemId).get();
+      final existingTitle =
+          (existing.data()?['title'] as String?) ?? 'an itinerary item';
       await _itineraryCollection(tripId).doc(itemId).delete();
       await _appendTripUpdate(
         tripId,
@@ -729,6 +774,10 @@ class FirestoreTripRepository implements TripRepository {
           text: 'Removed an itinerary item.',
           kind: TripUpdateKind.planner,
         ),
+      );
+      await _sendSystemChatMessage(
+        tripId,
+        'Removed from itinerary: $existingTitle.',
       );
     } catch (e) {
       await _enqueuePending(
@@ -762,6 +811,10 @@ class FirestoreTripRepository implements TripRepository {
           text: 'Reordered the day plan.',
           kind: TripUpdateKind.planner,
         ),
+      );
+      await _sendSystemChatMessage(
+        tripId,
+        'Updated itinerary order.',
       );
     } catch (e) {
       await _enqueuePending(
@@ -917,6 +970,31 @@ class FirestoreTripRepository implements TripRepository {
   }
 
   @override
+  Future<void> sendChatSystemMessage(String tripId, ChatMessage message) async {
+    await _messagesCollection(
+      tripId,
+    ).doc(message.id).set(_chatDocData(message));
+    await _trips.doc(tripId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
+  Future<void> toggleChatReaction(
+    String tripId,
+    String messageId,
+    String emoji,
+    bool add,
+  ) async {
+    final field = 'reactions.$emoji';
+    await _messagesCollection(tripId).doc(messageId).set({
+      field: add
+          ? FieldValue.arrayUnion([currentUserId])
+          : FieldValue.arrayRemove([currentUserId]),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
   @override
   Future<void> upsertSharedChecklistItem(
     String tripId,
@@ -1109,13 +1187,17 @@ class FirestoreTripRepository implements TripRepository {
     }).toList();
 
     var updatedMembers = trip.members;
+    String? approvedName;
+    String? approvedUserId;
     if (status == JoinRequestStatus.approved) {
       final req = updatedRequests.firstWhere((r) => r.id == requestId);
+      approvedUserId = req.userId;
       final exists = updatedMembers.any((m) => m.userId == req.userId);
       final profile = await getUserProfile(req.userId);
       final displayName = profile?.displayName.isNotEmpty == true
           ? profile!.displayName
           : 'Traveler';
+      approvedName = displayName;
       if (!exists) {
         updatedMembers = [
           ...updatedMembers,
@@ -1145,6 +1227,13 @@ class FirestoreTripRepository implements TripRepository {
         updatedAt: DateTime.now(),
       ),
     );
+    if (approvedName != null && approvedUserId != null) {
+      await _sendSystemChatMessage(
+        tripId,
+        '$approvedName joined the trip.',
+        actorId: approvedUserId,
+      );
+    }
   }
 
   @override
@@ -1345,6 +1434,28 @@ class FirestoreTripRepository implements TripRepository {
   }
 
   @override
+  Future<bool> isHandleAvailable(
+    String handle, {
+    String? excludeUserId,
+  }) async {
+    final trimmed = handle.trim().toLowerCase();
+    if (trimmed.isEmpty) return true;
+    final queries = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
+    queries.add(_users.where('handle', isEqualTo: trimmed).limit(1).get());
+    queries.add(_users.where('username', isEqualTo: trimmed).limit(1).get());
+    final snapshots = await Future.wait(queries);
+    for (final snapshot in snapshots) {
+      if (snapshot.docs.isEmpty) continue;
+      final doc = snapshot.docs.first;
+      if (excludeUserId != null && doc.id == excludeUserId) {
+        continue;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  @override
   Future<List<UserProfile>> searchUserProfiles(String query) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return [];
@@ -1356,7 +1467,7 @@ class FirestoreTripRepository implements TripRepository {
     futures.add(
       _users
           .where('displayName', isGreaterThanOrEqualTo: trimmed)
-          .where('displayName', isLessThan: '${trimmed}\uf8ff')
+          .where('displayName', isLessThan: '$trimmed\uf8ff')
           .limit(12)
           .get(),
     );

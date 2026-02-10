@@ -51,7 +51,13 @@ class AppScaffold extends StatelessWidget {
       bottomNavigationBar: bottomNavigationBar,
       body: SafeArea(
         child: Padding(
-          padding: padding ?? const EdgeInsets.all(AppSpacing.xl),
+          padding: padding ??
+              const EdgeInsets.fromLTRB(
+                AppSpacing.xl,
+                AppSpacing.lg,
+                AppSpacing.xl,
+                AppSpacing.xl,
+              ),
           child: body,
         ),
       ),

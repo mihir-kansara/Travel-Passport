@@ -13,6 +13,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'package:flutter_application_trial/src/app.dart';
+import 'package:flutter_application_trial/src/models/trip.dart';
+import 'package:flutter_application_trial/src/providers.dart';
 
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
@@ -32,7 +34,17 @@ void main() {
 
   testWidgets('App launches successfully', (WidgetTester tester) async {
     // Build our app and trigger a frame.
-    await tester.pumpWidget(ProviderScope(child: AppEntry()));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authSessionProvider.overrideWith((ref) => Stream.value(null)),
+          userTripsProvider.overrideWith(
+            (ref) => Future.value(<Trip>[]),
+          ),
+        ],
+        child: const AppEntry(),
+      ),
+    );
 
     // Verify the root widget renders without depending on auth state.
     expect(find.byType(AppEntry), findsOneWidget);

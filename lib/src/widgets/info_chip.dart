@@ -16,7 +16,7 @@ class InfoChip extends StatelessWidget {
         vertical: AppSpacing.sm,
       ),
       decoration: BoxDecoration(
-        color: tone ?? const Color(0xFFF1F5F9),
+        color: tone ?? AppColors.surfaceAlt,
         borderRadius: BorderRadius.circular(999),
       ),
       child: Row(

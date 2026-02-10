@@ -12,7 +12,20 @@
           "package_name": "com.travelpassport.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "794333114909-lv1ccgg497em10vbikrm9oh4pl0l3fn3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.travelpassport.app",
+            "certificate_hash": "8f9d861cf276e8efed49b698bab0bdf44a7e4f14"
+          }
+        },
+        {
+          "client_id": "794333114909-dd4d8hirgf0g2gk578vq5l4clrc4fseg.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyA9bg_jVnuE-lA09AEb76rjayuRRYn9ugk"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "794333114909-dd4d8hirgf0g2gk578vq5l4clrc4fseg.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "794333114909-jptpa0dkk2th8v9bt08br3mmb3etsn8q.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.flutterApplicationTrial"
+              }
+            }
+          ]
         }
       }
     }

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_application_trial/src/app_config.dart';
 import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
@@ -13,6 +14,7 @@ import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 import 'package:flutter_application_trial/src/widgets/primary_button.dart';
 import 'package:flutter_application_trial/src/widgets/secondary_button.dart';
 import 'package:flutter_application_trial/src/widgets/section_header.dart';
+import 'package:flutter_application_trial/src/widgets/async_state_view.dart';
 
 class TripSettingsScreen extends ConsumerStatefulWidget {
   final String tripId;
@@ -54,7 +56,7 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
 
     return AppScaffold(
       title: 'Trip settings',
-      onHome: () => Navigator.of(context).popUntil((route) => route.isFirst),
+      onHome: () => context.go('/home'),
       body: tripAsync.when(
         data: (trip) {
           if (trip == null) {
@@ -160,61 +162,59 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
                 subtitle: 'Current trip collaborators.',
               ),
               const SizedBox(height: AppSpacing.lg),
-              ...trip.members.map(
-                (member) {
-                  final profile = profiles[member.userId];
-                  final displayName = profile?.displayName.isNotEmpty == true
-                      ? profile!.displayName
-                      : member.name;
-                  final photoUrl = profile?.photoUrl ?? member.avatarUrl;
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(AppRadii.md),
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 18,
-                          backgroundColor: AppColors.border,
-                          backgroundImage: photoUrl != null
-                              ? CachedNetworkImageProvider(photoUrl)
-                              : null,
-                          child: photoUrl == null
-                              ? Text(
-                                  _initials(displayName),
-                                  style: Theme.of(context).textTheme.labelSmall
-                                      ?.copyWith(fontWeight: FontWeight.w800),
-                                )
-                              : null,
-                        ),
-                        const SizedBox(width: AppSpacing.md),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                displayName,
-                                style: Theme.of(context).textTheme.labelLarge
+              ...trip.members.map((member) {
+                final profile = profiles[member.userId];
+                final displayName = profile?.displayName.isNotEmpty == true
+                    ? profile!.displayName
+                    : member.name;
+                final photoUrl = profile?.photoUrl ?? member.avatarUrl;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+                  padding: const EdgeInsets.all(AppSpacing.lg),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(AppRadii.md),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 18,
+                        backgroundColor: AppColors.border,
+                        backgroundImage: photoUrl != null
+                            ? CachedNetworkImageProvider(photoUrl)
+                            : null,
+                        child: photoUrl == null
+                            ? Text(
+                                _initials(displayName),
+                                style: Theme.of(context).textTheme.labelSmall
                                     ?.copyWith(fontWeight: FontWeight.w800),
-                              ),
-                              const SizedBox(height: AppSpacing.xs),
-                              Text(
-                                member.role.name,
-                                style: Theme.of(context).textTheme.bodySmall
-                                    ?.copyWith(color: AppColors.mutedText),
-                              ),
-                            ],
-                          ),
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: AppSpacing.md),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              displayName,
+                              style: Theme.of(context).textTheme.labelLarge
+                                  ?.copyWith(fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              member.role.name,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: AppColors.mutedText),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                  );
-                },
-              ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
               const SizedBox(height: AppSpacing.xxl),
               const SectionHeader(
                 title: 'Sharing',
@@ -224,7 +224,7 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(AppSpacing.lg),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(AppRadii.md),
                   border: Border.all(color: AppColors.border),
                 ),
@@ -242,9 +242,10 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
                       value: trip.story.publishToWall,
                       onChanged: _isPublishing || _isSaving
                           ? null
-                          : (value) => _togglePublish(trip, value),
-                      activeThumbColor: AppColors.primary,
-                      activeTrackColor: const Color(0xFFC7D2FE),
+                          : (value) {
+                              HapticFeedback.selectionClick();
+                              _togglePublish(trip, value);
+                            },
                     ),
                   ],
                 ),
@@ -253,7 +254,7 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
               Container(
                 padding: const EdgeInsets.all(AppSpacing.lg),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(AppRadii.md),
                   border: Border.all(color: AppColors.border),
                 ),
@@ -329,8 +330,13 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
             ],
           );
         },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, st) => Center(child: Text('Error loading trip: $e')),
+        loading: () => const AsyncLoadingView.centered(
+          message: 'Loading trip settings...'
+        ),
+        error: (e, st) => AsyncErrorView(
+          message: 'Unable to load trip settings.',
+          onRetry: () => ref.refresh(tripByIdProvider(widget.tripId)),
+        ),
       ),
     );
   }
@@ -423,18 +429,18 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
               trip.story.headline.isNotEmpty
                   ? trip.story.headline
                   : '${trip.destination} passport',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w800,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 6),
             Text(
               trip.story.highlights.isNotEmpty
                   ? trip.story.highlights.take(3).join(' · ')
                   : 'Add highlights to make the story pop.',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: const Color(0xFF64748B),
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
             ),
           ],
         ),
@@ -469,6 +475,13 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
         final repo = ref.read(repositoryProvider);
         final invite = await repo.createInvite(tripId: trip.id);
         final link = AppConfig.inviteLink(invite.token);
+        await ref
+            .read(appAnalyticsProvider)
+            .logInviteCreated(
+              tripId: trip.id,
+              role: invite.role.name,
+              source: 'settings',
+            );
         setState(() => _inviteLink = link);
         await Clipboard.setData(ClipboardData(text: link));
         if (!mounted) return;
@@ -554,7 +567,7 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
         await repo.removeMember(trip.id, userId);
         ref.invalidate(userTripsProvider);
         if (!mounted) return;
-        Navigator.of(context).popUntil((route) => route.isFirst);
+        context.go('/trips');
       },
     );
   }
@@ -576,22 +589,13 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
         await repo.deleteTrip(trip.id);
         ref.invalidate(userTripsProvider);
         if (!mounted) return;
-        Navigator.of(context).popUntil((route) => route.isFirst);
+        context.go('/trips');
       },
     );
   }
 
   InputDecoration _inputDecoration(String label, String hint) {
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      filled: true,
-      fillColor: const Color(0xFFF8FAFC),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(AppRadii.md),
-        borderSide: BorderSide.none,
-      ),
-    );
+    return InputDecoration(labelText: label, hintText: hint);
   }
 
   String _initials(String name) {

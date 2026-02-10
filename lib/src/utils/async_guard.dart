@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/utils/invite_utils.dart';
+import 'package:flutter_application_trial/src/utils/app_logger.dart';
 
 void showGuardedSnackBar(BuildContext context, String message) {
   if (!context.mounted) return;
@@ -11,6 +13,7 @@ void showGuardedSnackBar(BuildContext context, String message) {
 Future<bool> runGuarded(
   BuildContext context,
   Future<void> Function() action, {
+  String? operation,
   String? successMessage,
   String? errorMessage,
   void Function(Object error)? onError,
@@ -21,10 +24,17 @@ Future<bool> runGuarded(
       showGuardedSnackBar(context, successMessage);
     }
     return true;
-  } catch (error) {
+  } catch (error, stackTrace) {
     if (onError != null) {
       onError(error);
     }
+    AppLogger.error(
+      operation == null
+          ? 'Guarded action failed.'
+          : 'Guarded action failed: $operation',
+      error: error,
+      stackTrace: stackTrace,
+    );
     if (context.mounted && errorMessage != null) {
       showGuardedSnackBar(context, errorMessage);
     }
@@ -37,6 +47,7 @@ Future<T?> runGuardedAsync<T>({
   required WidgetRef ref,
   required Future<T> Function() task,
   required ValueSetter<bool> setBusy,
+  String? operation,
   String? successMessage,
   String? errorMessage,
   void Function(Object error)? onError,
@@ -49,11 +60,18 @@ Future<T?> runGuardedAsync<T>({
       showGuardedSnackBar(context, successMessage);
     }
     return result;
-  } catch (error) {
+  } catch (error, stackTrace) {
     if (!context.mounted) return null;
     if (onError != null) {
       onError(error);
     }
+    AppLogger.error(
+      operation == null
+          ? 'Guarded action failed.'
+          : 'Guarded action failed: $operation',
+      error: error,
+      stackTrace: stackTrace,
+    );
     if (errorMessage != null) {
       showGuardedSnackBar(context, errorMessage);
     }
@@ -97,7 +115,9 @@ Future<bool> ensureSignedIn(
   );
   if (!context.mounted) return false;
   if (result == true) {
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    if (context.mounted) {
+      context.go('/auth');
+    }
   }
   return false;
 }

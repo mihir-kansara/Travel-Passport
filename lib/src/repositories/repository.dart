@@ -82,6 +82,9 @@ abstract class TripRepository {
   /// Send a chat message within a trip.
   Future<void> sendChatMessage(String tripId, ChatMessage message);
 
+  /// Send a system chat message within a trip.
+  Future<void> sendChatSystemMessage(String tripId, ChatMessage message);
+
   /// Stream chat messages in descending order (latest last in returned list).
   Stream<List<ChatMessage>> watchChatMessages(String tripId, {int limit});
 
@@ -91,6 +94,14 @@ abstract class TripRepository {
     int limit,
     ChatMessagesCursor? before,
   });
+
+  /// Toggle a reaction on a chat message.
+  Future<void> toggleChatReaction(
+    String tripId,
+    String messageId,
+    String emoji,
+    bool add,
+  );
 
   /// Stream comments for a specific itinerary item.
   Stream<List<ItineraryComment>> watchItineraryComments(
@@ -160,6 +171,12 @@ abstract class TripRepository {
   /// Update user profile.
   Future<void> updateUserProfile(UserProfile profile);
 
+  /// Check if a handle/username is available.
+  Future<bool> isHandleAvailable(
+    String handle, {
+    String? excludeUserId,
+  });
+
   /// Search user profiles by available identity (name/email/handle/phone).
   Future<List<UserProfile>> searchUserProfiles(String query);
 
@@ -212,6 +229,7 @@ class UserProfile {
   final String? email;
   final String? phone;
   final String? photoUrl;
+  final String? bio;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -222,6 +240,7 @@ class UserProfile {
     this.email,
     this.phone,
     this.photoUrl,
+    this.bio,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -234,6 +253,7 @@ class UserProfile {
     String? email,
     String? phone,
     String? photoUrl,
+    String? bio,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -244,6 +264,7 @@ class UserProfile {
       email: email ?? this.email,
       phone: phone ?? this.phone,
       photoUrl: photoUrl ?? this.photoUrl,
+      bio: bio ?? this.bio,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -268,6 +289,9 @@ class UserProfile {
     }
     if (photoUrl != null) {
       data['photoUrl'] = photoUrl;
+    }
+    if (bio != null) {
+      data['bio'] = bio;
     }
     return data;
   }
@@ -294,6 +318,7 @@ class UserProfile {
       email: data['email'] as String?,
       phone: (data['phone'] ?? data['phoneNumber']) as String?,
       photoUrl: (data['photoUrl'] ?? data['avatarUrl']) as String?,
+      bio: data['bio'] as String?,
       createdAt: parseTimestamp(data['createdAt']),
       updatedAt: parseTimestamp(data['updatedAt']),
     );

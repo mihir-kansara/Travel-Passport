@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -22,6 +22,40 @@ import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 import 'package:flutter_application_trial/src/widgets/info_chip.dart';
 
 enum TripDetailTab { planner, checklist, story, people, chat }
+
+extension TripDetailTabQuery on TripDetailTab {
+  String toQueryValue() {
+    switch (this) {
+      case TripDetailTab.planner:
+        return 'planner';
+      case TripDetailTab.checklist:
+        return 'checklist';
+      case TripDetailTab.story:
+        return 'story';
+      case TripDetailTab.people:
+        return 'people';
+      case TripDetailTab.chat:
+        return 'chat';
+    }
+  }
+}
+
+TripDetailTab tripDetailTabFromQuery(String? tabName) {
+  switch (tabName) {
+    case 'planner':
+      return TripDetailTab.planner;
+    case 'checklist':
+      return TripDetailTab.checklist;
+    case 'story':
+      return TripDetailTab.story;
+    case 'people':
+      return TripDetailTab.people;
+    case 'chat':
+      return TripDetailTab.chat;
+    default:
+      return TripDetailTab.planner;
+  }
+}
 
 enum TripPermission { edit, post, invite, managePeople, changePrivacy }
 
@@ -533,6 +567,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
       authMessage: 'Sign in to comment on this story.',
     );
     if (!allowed) return;
+    if (!mounted) return;
     await _runTripAction(
       'comment-${trip.id}',
       () async {
@@ -678,7 +713,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
     ChecklistItem item,
   ) async {
     return _runTripAction(
-      'checklist-personal-${ownerUserId}-${item.id}',
+      'checklist-personal-$ownerUserId-${item.id}',
       () async {
         final repo = ref.read(repositoryProvider);
         await repo.upsertPersonalChecklistItem(trip.id, ownerUserId, item);
@@ -695,7 +730,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
     String itemId,
   ) async {
     return _runTripAction(
-      'checklist-personal-delete-${ownerUserId}-$itemId',
+      'checklist-personal-delete-$ownerUserId-$itemId',
       () async {
         final repo = ref.read(repositoryProvider);
         await repo.deletePersonalChecklistItem(trip.id, ownerUserId, itemId);
@@ -712,7 +747,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
     bool isShared,
   ) async {
     return _runTripAction(
-      'checklist-visibility-${ownerUserId}-$isShared',
+      'checklist-visibility-$ownerUserId-$isShared',
       () async {
         final repo = ref.read(repositoryProvider);
         await repo.setPersonalChecklistVisibility(
@@ -761,6 +796,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
       authMessage: 'Sign in to manage join requests.',
     );
     if (!allowed) return;
+    if (!mounted) return;
     await _runTripAction(
       'join-respond-$requestId',
       () async {
@@ -982,7 +1018,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
             const SizedBox(height: 6),
             Text(
               trip.story.highlights.isNotEmpty
-                  ? trip.story.highlights.take(3).join(' · ')
+                  ? trip.story.highlights.take(3).join(' ┬╖ ')
                   : 'Add highlights to make the story pop.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: const Color(0xFF64748B),
@@ -1053,6 +1089,8 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
       authMessage: 'Sign in to update the planner.',
     );
     if (!allowed) return;
+    if (!mounted) return;
+    if (!mounted) return;
     await _runTripAction(
       'planner-toggle-${item.id}',
       () async {
@@ -1129,6 +1167,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
       authMessage: 'Sign in to update the planner.',
     );
     if (!allowed) return;
+    if (!mounted) return;
     final titleController = TextEditingController(text: item?.title ?? '');
     final notesController = TextEditingController(
       text: item?.notes ?? item?.description ?? '',
@@ -1159,10 +1198,9 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
         ? TimeOfDay.fromDateTime(item.dateTime)
         : _defaultTimeForSection(selectedSection);
     bool isTimeSet = item?.isTimeSet ?? false;
-    String? selectedCategoryId = item?.categoryId ??
-        _defaultCategoryId(resolvedCategories);
-    if (selectedCategoryId == null ||
-        !categoryById.containsKey(selectedCategoryId)) {
+    var selectedCategoryId =
+      item?.categoryId ?? _defaultCategoryId(resolvedCategories);
+    if (!categoryById.containsKey(selectedCategoryId)) {
       selectedCategoryId = _defaultCategoryId(resolvedCategories);
     }
     ItineraryStatus selectedStatus = item?.status ?? ItineraryStatus.planned;
@@ -1236,8 +1274,9 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
                     const SizedBox(width: 12),
                     Expanded(
                       child: DropdownButtonFormField<String>(
-                        value: selectedCategoryId,
+                        initialValue: selectedCategoryId,
                         onChanged: (value) {
+                          if (value == null) return;
                           setState(() => selectedCategoryId = value);
                         },
                         items: resolvedCategories
@@ -1488,6 +1527,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
       authMessage: 'Sign in to update the planner.',
     );
     if (!allowed) return;
+    if (!mounted) return;
     final controller = TextEditingController(
       text: item.notes ?? item.description ?? '',
     );
@@ -1744,7 +1784,7 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
                           child: ListView.separated(
                             shrinkWrap: true,
                             itemCount: filtered.length,
-                            separatorBuilder: (_, __) =>
+                            separatorBuilder: (_, index) =>
                                 const SizedBox(height: 8),
                             itemBuilder: (_, index) {
                               final profile = filtered[index];
@@ -2179,7 +2219,7 @@ class _PlannerTab extends StatelessWidget {
                         if (latestUpdate != null && updateName != null) ...[
                           const SizedBox(height: 6),
                           Text(
-                            '${latestUpdate.text} · ${_timeAgo(latestUpdate.createdAt)} · $updateName',
+                            '${latestUpdate.text} ┬╖ ${_timeAgo(latestUpdate.createdAt)} ┬╖ $updateName',
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(color: const Color(0xFF64748B)),
                           ),
@@ -2323,7 +2363,7 @@ class _PlannerDaySelector extends StatelessWidget {
           itemBuilder: (context, index) {
             final date = days[index];
             final label =
-                'Day ${index + 1} · ${DateFormat('EEE, MMM d').format(date)}';
+                'Day ${index + 1} ┬╖ ${DateFormat('EEE, MMM d').format(date)}';
             final isActive = index == selectedDayIndex;
             return InkWell(
               onTap: () => onSelectDay(index),
@@ -2579,7 +2619,7 @@ class _RecentUpdatesCard extends StatelessWidget {
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Text(
-                '${update.text} · $name · ${_timeAgo(update.createdAt)}',
+                '${update.text} ┬╖ $name ┬╖ ${_timeAgo(update.createdAt)}',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: const Color(0xFF64748B),
                 ),
@@ -2905,7 +2945,7 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
           if (updatedByName != null) ...[
             const SizedBox(height: 6),
             Text(
-              'Edited by $updatedByName · ${_timeAgo(item.updatedAt)}',
+              'Edited by $updatedByName ┬╖ ${_timeAgo(item.updatedAt)}',
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
                 color: const Color(0xFF94A3B8),
               ),
@@ -2935,7 +2975,7 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: item.photoUrls.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                separatorBuilder: (_, index) => const SizedBox(width: 8),
                 itemBuilder: (context, index) {
                   final url = item.photoUrls[index];
                   return ClipRRect(
@@ -2945,9 +2985,9 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
                       width: 64,
                       height: 64,
                       fit: BoxFit.cover,
-                      placeholder: (context, _) =>
+                        placeholder: (context, _) =>
                           Container(color: const Color(0xFFE2E8F0)),
-                      errorWidget: (context, _, __) =>
+                        errorWidget: (context, _, error) =>
                           Container(color: const Color(0xFFE2E8F0)),
                     ),
                   );
@@ -3037,7 +3077,7 @@ class _ChecklistTabState extends State<_ChecklistTab> {
           sharedProgress: sharedProgress,
           personalProgress: personalProgress,
           remainingLabel:
-              '$sharedLeft shared left · $personalLeft personal left',
+              '$sharedLeft shared left ┬╖ $personalLeft personal left',
         ),
         const SizedBox(height: 16),
         Row(
@@ -3578,7 +3618,7 @@ class _ChecklistTabState extends State<_ChecklistTab> {
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String?>(
-                  value: assignedUserId,
+                  initialValue: assignedUserId,
                   items: [
                     const DropdownMenuItem<String?>(
                       value: null,
@@ -4417,7 +4457,7 @@ class _ChecklistTemplateSheet extends StatelessWidget {
             height: 360,
             child: ListView.separated(
               itemCount: checklistTemplates.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              separatorBuilder: (_, index) => const SizedBox(height: 10),
               itemBuilder: (context, index) {
                 final template = checklistTemplates[index];
                 return InkWell(
@@ -4598,7 +4638,7 @@ class _StoryTab extends StatelessWidget {
                     const SizedBox(height: 8),
                     Text(
                       trip.story.highlights.isNotEmpty
-                          ? trip.story.highlights.take(3).join(' · ')
+                          ? trip.story.highlights.take(3).join(' ┬╖ ')
                           : 'Add highlights to make the story pop.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: const Color(0xFF64748B),
@@ -5863,7 +5903,7 @@ class _MemberTile extends StatelessWidget {
     if (invitedByName != null) {
       metaParts.add('Invited by $invitedByName');
     }
-    final metaLine = metaParts.join(' · ');
+    final metaLine = metaParts.join(' ┬╖ ');
     final isSelf = member.userId == currentUserId;
     final canShowActions = canManagePeople && !isSelf;
     return Container(
@@ -5910,7 +5950,7 @@ class _MemberTile extends StatelessWidget {
                 if (action == _MemberAction.remove) {
                   final confirmed = await _confirmMemberAction(
                     context,
-                    title: 'Remove ${displayName}?',
+                    title: 'Remove $displayName?',
                     body: 'They will lose access to the trip immediately.',
                     confirmLabel: 'Remove',
                   );
@@ -5924,9 +5964,9 @@ class _MemberTile extends StatelessWidget {
                     _roleRank(targetRole) < _roleRank(member.role);
                 final title = targetRole == MemberRole.owner
                     ? 'Transfer ownership?'
-                    : '${isDowngrade ? 'Downgrade' : 'Promote'} ${displayName}?';
+                    : '${isDowngrade ? 'Downgrade' : 'Promote'} $displayName?';
                 final body = targetRole == MemberRole.owner
-                    ? 'This will make ${displayName} the trip owner.'
+                    ? 'This will make $displayName the trip owner.'
                     : 'Change role to ${_roleLabel(targetRole)}.';
                 final confirmLabel =
                     targetRole == MemberRole.owner ? 'Transfer' : 'Confirm';
@@ -7046,47 +7086,6 @@ String _legacyCategoryIdForType(ItineraryItemType type) {
       return 'other';
   }
 }
-IconData _iconForType(ItineraryItemType type) {
-  switch (type) {
-    case ItineraryItemType.flight:
-      return Icons.flight_takeoff;
-    case ItineraryItemType.transport:
-      return Icons.directions_transit_outlined;
-    case ItineraryItemType.activity:
-      return Icons.camera_alt_outlined;
-    case ItineraryItemType.stay:
-      return Icons.hotel_outlined;
-    case ItineraryItemType.lodging:
-      return Icons.hotel_outlined;
-    case ItineraryItemType.food:
-      return Icons.restaurant_outlined;
-    case ItineraryItemType.note:
-      return Icons.note_outlined;
-    case ItineraryItemType.other:
-      return Icons.more_horiz;
-  }
-}
-
-String _labelForType(ItineraryItemType type) {
-  switch (type) {
-    case ItineraryItemType.flight:
-      return 'Flights';
-    case ItineraryItemType.stay:
-      return 'Lodging';
-    case ItineraryItemType.lodging:
-      return 'Lodging';
-    case ItineraryItemType.food:
-      return 'Food';
-    case ItineraryItemType.activity:
-      return 'Activities';
-    case ItineraryItemType.transport:
-      return 'Transport';
-    case ItineraryItemType.note:
-      return 'Notes';
-    case ItineraryItemType.other:
-      return 'Other';
-  }
-}
 
 String _labelForStatus(ItineraryStatus status) {
   switch (status) {
@@ -7112,3 +7111,4 @@ LinearGradient _gradientForTrip(Trip trip) {
       : trip.id.hashCode.abs() % gradients.length;
   return gradients[index];
 }
+

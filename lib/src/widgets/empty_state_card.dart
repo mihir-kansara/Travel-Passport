@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_application_trial/src/app_theme.dart';
+import 'package:flutter_application_trial/src/widgets/primary_button.dart';
+import 'package:flutter_application_trial/src/widgets/secondary_button.dart';
 
 class EmptyStateCard extends StatelessWidget {
   final String title;
@@ -7,6 +9,9 @@ class EmptyStateCard extends StatelessWidget {
   final IconData icon;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final IconData? actionIcon;
+  final String? secondaryActionLabel;
+  final VoidCallback? onSecondaryAction;
 
   const EmptyStateCard({
     super.key,
@@ -15,6 +20,9 @@ class EmptyStateCard extends StatelessWidget {
     required this.icon,
     this.actionLabel,
     this.onAction,
+    this.actionIcon,
+    this.secondaryActionLabel,
+    this.onSecondaryAction,
   });
 
   @override
@@ -32,7 +40,7 @@ class EmptyStateCard extends StatelessWidget {
             height: 44,
             width: 44,
             decoration: BoxDecoration(
-              color: const Color(0xFFF8FAFC),
+              color: AppColors.surfaceAlt,
               borderRadius: BorderRadius.circular(AppRadii.sm),
             ),
             child: Icon(icon, color: AppColors.primary),
@@ -55,9 +63,30 @@ class EmptyStateCard extends StatelessWidget {
                     context,
                   ).textTheme.bodySmall?.copyWith(color: AppColors.mutedText),
                 ),
-                if (actionLabel != null && onAction != null) ...[
-                  const SizedBox(height: AppSpacing.sm),
-                  TextButton(onPressed: onAction, child: Text(actionLabel!)),
+                if ((actionLabel != null && onAction != null) ||
+                    (secondaryActionLabel != null &&
+                        onSecondaryAction != null)) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  Wrap(
+                    spacing: AppSpacing.sm,
+                    runSpacing: AppSpacing.sm,
+                    children: [
+                      if (actionLabel != null && onAction != null)
+                        PrimaryButton(
+                          label: actionLabel!,
+                          icon: actionIcon,
+                          onPressed: onAction,
+                          isCompact: true,
+                        ),
+                      if (secondaryActionLabel != null &&
+                          onSecondaryAction != null)
+                        SecondaryButton(
+                          label: secondaryActionLabel!,
+                          onPressed: onSecondaryAction,
+                          isCompact: true,
+                        ),
+                    ],
+                  ),
                 ],
               ],
             ),

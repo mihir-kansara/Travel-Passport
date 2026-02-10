@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 import 'package:flutter_application_trial/src/widgets/primary_button.dart';
 
@@ -17,7 +18,7 @@ class WelcomeScreen extends StatelessWidget {
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFF0F172A), Color(0xFF1D4ED8)],
+            colors: [AppColors.text, AppColors.primary],
           ),
         ),
         child: SafeArea(
@@ -26,20 +27,25 @@ class WelcomeScreen extends StatelessWidget {
               Positioned(
                 top: -60,
                 right: -80,
-                child: _BlurOrb(color: Color(0xFF38BDF8), size: 200),
+                child: _BlurOrb(color: AppColors.secondary, size: 200),
               ),
               Positioned(
                 bottom: -80,
                 left: -60,
-                child: _BlurOrb(color: Color(0xFFF472B6), size: 220),
+                child: _BlurOrb(color: AppColors.primarySoft, size: 220),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.xl,
+                  AppSpacing.xl,
+                  AppSpacing.xl,
+                  AppSpacing.xxl,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const _LogoMark(),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: AppSpacing.xl),
                     Text(
                       'Travel Passport',
                       style: Theme.of(context).textTheme.headlineMedium
@@ -48,7 +54,7 @@ class WelcomeScreen extends StatelessWidget {
                             color: Colors.white,
                           ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: AppSpacing.sm),
                     Text(
                       'Plan together. Share like a story. Every trip becomes a living passport.',
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -56,7 +62,7 @@ class WelcomeScreen extends StatelessWidget {
                         height: 1.4,
                       ),
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: AppSpacing.xl),
                     const _FeatureList(),
                     const Spacer(),
                     SizedBox(
@@ -64,9 +70,10 @@ class WelcomeScreen extends StatelessWidget {
                       child: PrimaryButton(
                         label: 'Continue',
                         onPressed: onContinue,
+                        fullWidth: true,
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: AppSpacing.sm),
                     Text(
                       'By continuing you agree to our Terms and Privacy Policy.',
                       style: Theme.of(
@@ -96,11 +103,11 @@ class _LogoMark extends StatelessWidget {
           width: 42,
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(AppRadii.md),
           ),
-          child: const Icon(Icons.flight_takeoff, color: Color(0xFF1D4ED8)),
+          child: const Icon(Icons.flight_takeoff, color: AppColors.primary),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: AppSpacing.sm),
         Text(
           'Passport',
           style: Theme.of(context).textTheme.titleMedium?.copyWith(

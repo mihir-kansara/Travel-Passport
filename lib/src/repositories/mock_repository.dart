@@ -42,6 +42,28 @@ class MockTripRepository implements TripRepository {
     );
   }
 
+  void _appendSystemChatMessage(
+    String tripId,
+    String text, {
+    String? actorId,
+  }) {
+    final trip = _trips.firstWhere(
+      (t) => t.id == tripId,
+      orElse: () => throw Exception('Trip not found'),
+    );
+    final message = ChatMessage(
+      id: const Uuid().v4(),
+      authorId: actorId ?? _currentUserId,
+      text: text,
+      createdAt: DateTime.now(),
+      kind: ChatMessageKind.system,
+    );
+    _trips[_trips.indexOf(trip)] = trip.copyWith(
+      chat: [...trip.chat, message],
+      updatedAt: DateTime.now(),
+    );
+  }
+
   String _pairKey(String a, String b) {
     final ids = [a, b]..sort();
     return '${ids.first}_${ids.last}';
@@ -59,6 +81,7 @@ class MockTripRepository implements TripRepository {
           email: 'you@example.com',
           phone: '+1 415 555 0112',
           photoUrl: null,
+          bio: 'Planning the next adventure.',
           createdAt: now.subtract(const Duration(days: 220)),
           updatedAt: now,
         ),
@@ -69,6 +92,7 @@ class MockTripRepository implements TripRepository {
           email: 'jane@example.com',
           phone: '+1 415 555 0129',
           photoUrl: null,
+          bio: 'Chasing sunsets and good food.',
           createdAt: now.subtract(const Duration(days: 410)),
           updatedAt: now,
         ),
@@ -79,6 +103,7 @@ class MockTripRepository implements TripRepository {
           email: 'akshita@example.com',
           phone: '+1 415 555 0148',
           photoUrl: null,
+          bio: 'Planner by day, foodie by night.',
           createdAt: now.subtract(const Duration(days: 510)),
           updatedAt: now,
         ),
@@ -89,6 +114,7 @@ class MockTripRepository implements TripRepository {
           email: 'bhavesh@example.com',
           phone: '+1 415 555 0162',
           photoUrl: null,
+          bio: 'Weekend explorer.',
           createdAt: now.subtract(const Duration(days: 180)),
           updatedAt: now,
         ),
@@ -99,6 +125,7 @@ class MockTripRepository implements TripRepository {
           email: 'nia@example.com',
           phone: '+1 415 555 0198',
           photoUrl: null,
+          bio: 'Always booking the next flight.',
           createdAt: now.subtract(const Duration(days: 120)),
           updatedAt: now,
         ),
@@ -109,6 +136,7 @@ class MockTripRepository implements TripRepository {
           email: 'luca@example.com',
           phone: '+39 334 555 0198',
           photoUrl: null,
+          bio: 'Coffee, cameras, and coastlines.',
           createdAt: now.subtract(const Duration(days: 90)),
           updatedAt: now,
         ),
@@ -544,6 +572,66 @@ class MockTripRepository implements TripRepository {
   }
 
   @override
+  Future<void> sendChatSystemMessage(String tripId, ChatMessage message) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    final trip = _trips.firstWhere(
+      (t) => t.id == tripId,
+      orElse: () => throw Exception('Trip not found'),
+    );
+    _trips[_trips.indexOf(trip)] = trip.copyWith(
+      chat: [...trip.chat, message],
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<void> toggleChatReaction(
+    String tripId,
+    String messageId,
+    String emoji,
+    bool add,
+  ) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    final trip = _trips.firstWhere(
+      (t) => t.id == tripId,
+      orElse: () => throw Exception('Trip not found'),
+    );
+    final messages = [...trip.chat];
+    final index = messages.indexWhere((m) => m.id == messageId);
+    if (index < 0) return;
+    final message = messages[index];
+    final reactions = Map<String, List<String>>.from(message.reactions);
+    final users = List<String>.from(reactions[emoji] ?? const <String>[]);
+    if (add) {
+      if (!users.contains(_currentUserId)) {
+        users.add(_currentUserId);
+      }
+    } else {
+      users.remove(_currentUserId);
+    }
+    if (users.isEmpty) {
+      reactions.remove(emoji);
+    } else {
+      reactions[emoji] = users;
+    }
+    messages[index] = ChatMessage(
+      id: message.id,
+      authorId: message.authorId,
+      text: message.text,
+      createdAt: message.createdAt,
+      kind: message.kind,
+      mentions: message.mentions,
+      itemRefs: message.itemRefs,
+      replyToMessageId: message.replyToMessageId,
+      reactions: reactions,
+    );
+    _trips[_trips.indexOf(trip)] = trip.copyWith(
+      chat: messages,
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  @override
   Future<void> requestToJoin(String tripId, JoinRequest request) async {
     await Future.delayed(const Duration(milliseconds: 150));
     final trip = _trips.firstWhere(
@@ -573,8 +661,10 @@ class MockTripRepository implements TripRepository {
     }).toList();
 
     var updatedMembers = trip.members;
+    String? approvedUserId;
     if (status == JoinRequestStatus.approved) {
       final req = updatedRequests.firstWhere((r) => r.id == requestId);
+      approvedUserId = req.userId;
       final exists = updatedMembers.any((m) => m.userId == req.userId);
       if (!exists) {
         updatedMembers = [
@@ -602,6 +692,13 @@ class MockTripRepository implements TripRepository {
       members: updatedMembers,
       updatedAt: DateTime.now(),
     );
+    if (approvedUserId != null) {
+      _appendSystemChatMessage(
+        tripId,
+        'Traveler joined the trip.',
+        actorId: approvedUserId,
+      );
+    }
   }
 
   @override
@@ -630,6 +727,11 @@ class MockTripRepository implements TripRepository {
         updated.copyWith(checklist: updatedChecklist),
         update,
       );
+      _appendSystemChatMessage(
+        tripId,
+        '${member.name} joined the trip.',
+        actorId: member.userId,
+      );
     }
   }
 
@@ -640,6 +742,12 @@ class MockTripRepository implements TripRepository {
       (t) => t.id == tripId,
       orElse: () => throw Exception('Trip not found'),
     );
+    final memberName = trip.members
+        .firstWhere(
+          (m) => m.userId == userId,
+          orElse: () => trip.members.first,
+        )
+        .name;
     final updatedChecklist = _removePersonalChecklist(
       trip.checklist,
       userId,
@@ -648,6 +756,11 @@ class MockTripRepository implements TripRepository {
       members: trip.members.where((m) => m.userId != userId).toList(),
       checklist: updatedChecklist,
       updatedAt: DateTime.now(),
+    );
+    _appendSystemChatMessage(
+      tripId,
+      '$memberName left the trip.',
+      actorId: userId,
     );
   }
 
@@ -688,7 +801,6 @@ class MockTripRepository implements TripRepository {
     );
   }
 
-  @override
   @override
   Future<void> upsertSharedChecklistItem(
     String tripId,
@@ -913,6 +1025,12 @@ class MockTripRepository implements TripRepository {
     );
     final update = _buildUpdate(text: updateText, kind: TripUpdateKind.planner);
     _trips[_trips.indexOf(trip)] = _withUpdate(updated, update);
+    _appendSystemChatMessage(
+      tripId,
+      existingIndex >= 0
+          ? 'Updated itinerary: ${prepared.title}.'
+          : 'Added to itinerary: ${prepared.title}.',
+    );
 
     return prepared;
   }
@@ -944,6 +1062,10 @@ class MockTripRepository implements TripRepository {
       kind: TripUpdateKind.planner,
     );
     _trips[_trips.indexOf(trip)] = _withUpdate(updated, update);
+    _appendSystemChatMessage(
+      tripId,
+      'Updated itinerary: Removed ${removedItem.title}.',
+    );
   }
 
   @override
@@ -975,6 +1097,10 @@ class MockTripRepository implements TripRepository {
       kind: TripUpdateKind.planner,
     );
     _trips[_trips.indexOf(trip)] = _withUpdate(updatedTrip, update);
+    _appendSystemChatMessage(
+      tripId,
+      'Updated itinerary: Reordered the day plan.',
+    );
   }
 
   @override
@@ -1229,6 +1355,23 @@ class MockTripRepository implements TripRepository {
   Future<void> updateUserProfile(UserProfile profile) async {
     await Future.delayed(const Duration(milliseconds: 200));
     _mockProfiles[profile.userId] = profile;
+  }
+
+  @override
+  Future<bool> isHandleAvailable(
+    String handle, {
+    String? excludeUserId,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    final normalized = handle.trim().toLowerCase();
+    if (normalized.isEmpty) return true;
+    for (final entry in _mockProfiles.entries) {
+      if (excludeUserId != null && entry.key == excludeUserId) continue;
+      if ((entry.value.handle ?? '').toLowerCase() == normalized) {
+        return false;
+      }
+    }
+    return true;
   }
 
   @override

@@ -5,7 +5,9 @@ import 'package:flutter_application_trial/src/models/friends.dart';
 import 'package:flutter_application_trial/src/repositories/repository.dart';
 import 'package:flutter_application_trial/src/repositories/mock_repository.dart';
 import 'package:flutter_application_trial/src/repositories/firestore_repository.dart';
+import 'package:flutter_application_trial/src/analytics/app_analytics.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 final firebaseAuthProvider = Provider<FirebaseAuth>((ref) {
@@ -14,6 +16,14 @@ final firebaseAuthProvider = Provider<FirebaseAuth>((ref) {
 
 final firestoreProvider = Provider<FirebaseFirestore>((ref) {
   return FirebaseFirestore.instance;
+});
+
+final firebaseAnalyticsProvider = Provider<FirebaseAnalytics>((ref) {
+  return FirebaseAnalytics.instance;
+});
+
+final appAnalyticsProvider = Provider<AppAnalytics>((ref) {
+  return AppAnalytics(ref.watch(firebaseAnalyticsProvider));
 });
 
 /// Auth session provider (null means signed out).
@@ -129,7 +139,23 @@ final currentUserProfileProvider = FutureProvider<UserProfile?>((ref) async {
   final session = ref.watch(authSessionProvider).value;
   if (session == null) return null;
   final repo = ref.watch(repositoryProvider);
-  return repo.getUserProfile(session.userId);
+  var profile = await repo.getUserProfile(session.userId);
+  if (profile != null) return profile;
+  final now = DateTime.now();
+  final displayName = session.displayName.trim();
+  final created = UserProfile(
+    userId: session.userId,
+    displayName: displayName,
+    handle: null,
+    email: session.email,
+    phone: null,
+    photoUrl: session.avatarUrl,
+    bio: null,
+    createdAt: now,
+    updatedAt: now,
+  );
+  await repo.updateUserProfile(created);
+  return created;
 });
 
 /// Provider for a map of user profiles keyed by userId.

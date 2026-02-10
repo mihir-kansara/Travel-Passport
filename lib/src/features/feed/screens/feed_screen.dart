@@ -1,14 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_application_trial/src/app_config.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
-import 'package:flutter_application_trial/src/features/invites/screens/invite_join_screen.dart';
-import 'package:flutter_application_trial/src/features/story/screens/story_detail_screen.dart';
-import 'package:flutter_application_trial/src/features/trips/screens/create_trip_screen.dart';
 import 'package:flutter_application_trial/src/features/trips/screens/trip_detail_screen.dart';
-import 'package:flutter_application_trial/src/features/profile/screens/profile_setup_screen.dart';
 import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
 import 'package:flutter_application_trial/src/utils/invite_utils.dart';
@@ -21,10 +18,8 @@ import 'package:flutter_application_trial/src/widgets/trip_card.dart';
 
 enum HomeTab { wall, trips }
 
-typedef TripOpenCallback = void Function(
-  Trip trip, {
-  TripDetailTab? initialTab,
-});
+typedef TripOpenCallback =
+    void Function(Trip trip, {TripDetailTab? initialTab});
 
 class FeedScreen extends ConsumerStatefulWidget {
   final HomeTab initialTab;
@@ -45,11 +40,20 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   @override
+  void didUpdateWidget(covariant FeedScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialTab != widget.initialTab) {
+      _activeTab = widget.initialTab;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final tripsAsync = ref.watch(userTripsProvider);
     final session = ref.watch(authSessionProvider).value;
     final profile = ref.watch(currentUserProfileProvider).value;
-    final showProfileBanner = session != null &&
+    final showProfileBanner =
+        session != null &&
         (profile == null || !isValidDisplayName(profile.displayName));
 
     return tripsAsync.when(
@@ -77,9 +81,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     final drafts = trips.where((t) => !t.isPublished).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    final upcoming = trips
-        .where((t) => t.isPublished && !t.isPast)
-        .toList()
+    final upcoming = trips.where((t) => t.isPublished && !t.isPast).toList()
       ..sort((a, b) => a.startDate.compareTo(b.startDate));
     final past = trips.where((t) => t.isPublished && t.isPast).toList()
       ..sort((a, b) => b.endDate.compareTo(a.endDate));
@@ -111,7 +113,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
               activeTab: _activeTab,
               wallCount: wallCount,
               tripsCount: tripsCount,
-              onChanged: (tab) => setState(() => _activeTab = tab),
+              onChanged: _onPrimaryTabChanged,
             ),
           ),
           const SizedBox(height: AppSpacing.md),
@@ -152,33 +154,29 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   void _goToTripsTab() {
     if (!mounted) return;
-    setState(() => _activeTab = HomeTab.trips);
+    context.go('/trips');
+  }
+
+  void _onPrimaryTabChanged(HomeTab tab) {
+    if (!mounted) return;
+    if (tab == HomeTab.wall) {
+      context.go('/home');
+    } else {
+      context.go('/trips');
+    }
   }
 
   void _openTrip(Trip trip, {TripDetailTab? initialTab}) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => TripDetailScreen(
-          tripId: trip.id,
-          initialTab: initialTab ?? TripDetailTab.planner,
-        ),
-      ),
-    );
+    final tab = initialTab ?? TripDetailTab.planner;
+    context.push('/trips/${trip.id}?tab=${tab.toQueryValue()}');
   }
 
   void _openStory(Trip trip) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => StoryDetailScreen(tripId: trip.id)),
-    );
+    context.push('/trips/${trip.id}/story');
   }
 
   void _openCreateTrip() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const CreateTripScreen()),
-    );
+    context.push('/trips/create');
   }
 
   Future<void> _openJoinByToken() async {
@@ -216,12 +214,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       showGuardedSnackBar(context, 'Paste a valid invite token or link.');
       return;
     }
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => InviteJoinScreen(inviteInput: parsedToken),
-      ),
-    );
+    context.push('/invite/$parsedToken');
   }
 }
 
@@ -256,9 +249,9 @@ class _HomeHeader extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   'Plan together. Share like a story.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.mutedText,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: AppColors.mutedText),
                 ),
               ],
             ),
@@ -312,16 +305,16 @@ class _ProfileCompletionBanner extends StatelessWidget {
               children: [
                 Text(
                   'Complete your profile',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   'Add a display name so collaborators recognize you.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppColors.mutedText,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: AppColors.mutedText),
                 ),
               ],
             ),
@@ -329,11 +322,7 @@ class _ProfileCompletionBanner extends StatelessWidget {
           const SizedBox(width: AppSpacing.md),
           TextButton(
             onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const ProfileSetupScreen(),
-                ),
-              );
+              context.push('/profile/setup');
             },
             child: const Text('Finish'),
           ),
@@ -373,7 +362,7 @@ class _HomeTabs extends StatelessWidget {
             onTap: () => onChanged(HomeTab.wall),
           ),
           _TabButton(
-            label: 'Your Trips',
+            label: 'Trips',
             count: tripsCount,
             isActive: activeTab == HomeTab.trips,
             onTap: () => onChanged(HomeTab.trips),
@@ -422,11 +411,15 @@ class _TabButton extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                label,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: isActive ? AppColors.text : AppColors.mutedText,
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: isActive ? AppColors.text : AppColors.mutedText,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -641,32 +634,27 @@ class _WallFeed extends StatelessWidget {
     }
 
     return Column(
-      children:
-          trips
-              .map(
-                (trip) => Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.lg,
-                    0,
-                    AppSpacing.lg,
-                    AppSpacing.lg,
-                  ),
-                  child: TripCard(
-                    trip: trip,
-                    onTap: () => onOpenStory(trip),
-                    onPlanner: () => onOpenTrip(
-                      trip,
-                      initialTab: TripDetailTab.planner,
-                    ),
-                    onStory: () => onOpenStory(trip),
-                    onInvite: () => onOpenTrip(
-                      trip,
-                      initialTab: TripDetailTab.people,
-                    ),
-                  ),
-                ),
-              )
-              .toList(),
+      children: trips
+          .map(
+            (trip) => Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                0,
+                AppSpacing.lg,
+                AppSpacing.lg,
+              ),
+              child: TripCard(
+                trip: trip,
+                onTap: () => onOpenStory(trip),
+                onPlanner: () =>
+                    onOpenTrip(trip, initialTab: TripDetailTab.planner),
+                onStory: () => onOpenStory(trip),
+                onInvite: () =>
+                    onOpenTrip(trip, initialTab: TripDetailTab.people),
+              ),
+            ),
+          )
+          .toList(),
     );
   }
 }
@@ -703,111 +691,103 @@ class _TripsFeed extends StatelessWidget {
               onAction: onCreateTrip,
             )
           : Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (drafts.isNotEmpty) ...[
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (drafts.isNotEmpty) ...[
+                  Text(
+                    'Drafts',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.subtleText,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  ...drafts.map(
+                    (trip) => Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+                      child: TripCard(
+                        trip: trip,
+                        isDraft: true,
+                        onTap: () => onOpenTrip(trip),
+                        onPlanner: () =>
+                            onOpenTrip(trip, initialTab: TripDetailTab.planner),
+                        onStory: () => onOpenStory(trip),
+                        onInvite: () =>
+                            onOpenTrip(trip, initialTab: TripDetailTab.people),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                ],
                 Text(
-                  'Drafts',
+                  'Upcoming',
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: AppColors.subtleText,
                   ),
                 ),
                 const SizedBox(height: AppSpacing.md),
-                ...drafts.map(
-                  (trip) => Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-                    child: TripCard(
-                      trip: trip,
-                      isDraft: true,
-                      onTap: () => onOpenTrip(trip),
-                      onPlanner: () => onOpenTrip(
-                        trip,
-                        initialTab: TripDetailTab.planner,
-                      ),
-                      onStory: () => onOpenStory(trip),
-                      onInvite: () => onOpenTrip(
-                        trip,
-                        initialTab: TripDetailTab.people,
+                if (upcoming.isEmpty)
+                  EmptyStateCard(
+                    title: 'No upcoming trips',
+                    subtitle:
+                        'Start a trip and invite your crew to plan together.',
+                    icon: Icons.flight_takeoff,
+                    actionLabel: 'Start a trip',
+                    onAction: onCreateTrip,
+                  )
+                else
+                  ...upcoming.map(
+                    (trip) => Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+                      child: TripCard(
+                        trip: trip,
+                        onTap: () => onOpenTrip(trip),
+                        onPlanner: () =>
+                            onOpenTrip(trip, initialTab: TripDetailTab.planner),
+                        onStory: () => onOpenStory(trip),
+                        onInvite: () =>
+                            onOpenTrip(trip, initialTab: TripDetailTab.people),
                       ),
                     ),
                   ),
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  'Past',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.subtleText,
+                  ),
                 ),
-                const SizedBox(height: AppSpacing.sm),
+                const SizedBox(height: AppSpacing.md),
+                if (past.isEmpty)
+                  EmptyStateCard(
+                    title: 'No past trips yet',
+                    subtitle:
+                        'Your travel memories will collect here over time.',
+                    icon: Icons.archive_outlined,
+                    actionLabel: 'Start a trip',
+                    onAction: onCreateTrip,
+                  )
+                else
+                  ...past.map(
+                    (trip) => Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+                      child: TripCard(
+                        trip: trip,
+                        muted: true,
+                        onTap: () => onOpenTrip(trip),
+                        onPlanner: () =>
+                            onOpenTrip(trip, initialTab: TripDetailTab.planner),
+                        onStory: () => onOpenStory(trip),
+                        onInvite: () =>
+                            onOpenTrip(trip, initialTab: TripDetailTab.people),
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: AppSpacing.xl),
               ],
-              Text(
-                'Upcoming',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.subtleText,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              if (upcoming.isEmpty)
-                EmptyStateCard(
-                  title: 'No upcoming trips',
-                  subtitle: 'Start a trip and invite your crew to plan together.',
-                  icon: Icons.flight_takeoff,
-                  actionLabel: 'Start a trip',
-                  onAction: onCreateTrip,
-                )
-              else
-                ...upcoming.map(
-                  (trip) => Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-                    child: TripCard(
-                      trip: trip,
-                      onTap: () => onOpenTrip(trip),
-                      onPlanner: () => onOpenTrip(
-                        trip,
-                        initialTab: TripDetailTab.planner,
-                      ),
-                      onStory: () => onOpenStory(trip),
-                      onInvite: () => onOpenTrip(
-                        trip,
-                        initialTab: TripDetailTab.people,
-                      ),
-                    ),
-                  ),
-                ),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                'Past',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.subtleText,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              if (past.isEmpty)
-                EmptyStateCard(
-                  title: 'No past trips yet',
-                  subtitle: 'Your travel memories will collect here over time.',
-                  icon: Icons.archive_outlined,
-                )
-              else
-                ...past.map(
-                  (trip) => Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-                    child: TripCard(
-                      trip: trip,
-                      muted: true,
-                      onTap: () => onOpenTrip(trip),
-                      onPlanner: () => onOpenTrip(
-                        trip,
-                        initialTab: TripDetailTab.planner,
-                      ),
-                      onStory: () => onOpenStory(trip),
-                      onInvite: () => onOpenTrip(
-                        trip,
-                        initialTab: TripDetailTab.people,
-                      ),
-                    ),
-                  ),
-                ),
-              const SizedBox(height: AppSpacing.xl),
-            ],
-          ),
+            ),
     );
   }
 }
