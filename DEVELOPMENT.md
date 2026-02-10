@@ -191,6 +191,57 @@ root (this repo contains a nested Flutter project folder).
     └──────────────────────┘
 ```
 
+## Firestore Rules + Indexes (Friends)
+
+Add rules for the new collections: `friend_requests`, `friendships`, and `blocks`.
+Suggested baseline (adjust to your security model):
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() { return request.auth != null; }
+    function isSelf(uid) { return isSignedIn() && request.auth.uid == uid; }
+
+    match /friend_requests/{requestId} {
+      allow create: if isSignedIn()
+        && request.resource.data.fromUserId == request.auth.uid
+        && request.resource.data.toUserId is string;
+      allow read: if isSignedIn()
+        && (resource.data.fromUserId == request.auth.uid
+            || resource.data.toUserId == request.auth.uid);
+      allow update: if isSignedIn()
+        && (resource.data.toUserId == request.auth.uid
+            || resource.data.fromUserId == request.auth.uid);
+      allow delete: if false;
+    }
+
+    match /friendships/{friendshipId} {
+      allow read: if isSignedIn()
+        && request.auth.uid in resource.data.userIds;
+      allow create: if isSignedIn()
+        && request.auth.uid in request.resource.data.userIds;
+      allow delete: if isSignedIn()
+        && request.auth.uid in resource.data.userIds;
+    }
+
+    match /blocks/{blockId} {
+      allow read: if isSignedIn() && resource.data.blockerId == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.blockerId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.blockerId == request.auth.uid;
+    }
+  }
+}
+```
+
+Indexes to add (Firestore console or `firestore.indexes.json`):
+- `friend_requests`: composite index on `toUserId` + `status` (for incoming pending)
+- `friend_requests`: composite index on `fromUserId` + `status` (for outgoing pending)
+- `blocks`: single-field index on `blockerId` (usually automatic)
+- `users`: single-field indexes on `displayName`, `email`, `phone`, `handle` for search
+
+
 ### File Structure
 ```
 lib/

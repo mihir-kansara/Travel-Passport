@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
+import 'package:flutter_application_trial/src/models/friends.dart';
 
 /// Abstract repository for Trip data operations.
 abstract class TripRepository {
@@ -32,6 +33,9 @@ abstract class TripRepository {
   /// Remove a member from the trip (owner only).
   Future<void> removeMember(String tripId, String userId);
 
+  /// Update a member role in the trip (owner only).
+  Future<void> updateMemberRole(String tripId, String userId, MemberRole role);
+
   /// Add or update an itinerary item.
   Future<ItineraryItem> upsertItineraryItem(String tripId, ItineraryItem item);
 
@@ -39,16 +43,17 @@ abstract class TripRepository {
   Future<void> deleteItineraryItem(String tripId, String itemId);
 
   /// Reorder itinerary items within a day.
-  Future<void> reorderItineraryItems(
-    String tripId,
-    List<ItineraryItem> items,
-  );
+  Future<void> reorderItineraryItems(String tripId, List<ItineraryItem> items);
 
   /// Get itinerary items for a trip, optionally filtered by day.
   Future<List<ItineraryItem>> getItinerary(String tripId, {DateTime? day});
 
   /// Create an invite link for the trip.
-  Future<Invite> createInvite({required String tripId, String? invitedEmail});
+  Future<Invite> createInvite({
+    required String tripId,
+    String? invitedEmail,
+    MemberRole role = MemberRole.viewer,
+  });
 
   /// Get invite by token (for joining a trip).
   Future<Invite?> getInviteByToken(String token);
@@ -100,14 +105,32 @@ abstract class TripRepository {
     ItineraryComment comment,
   );
 
-  /// Update a member checklist entry.
-  Future<void> updateMemberChecklist(String tripId, MemberChecklist checklist);
-
   /// Add or update a shared checklist item.
   Future<void> upsertSharedChecklistItem(String tripId, ChecklistItem item);
 
   /// Delete a shared checklist item.
   Future<void> deleteSharedChecklistItem(String tripId, String itemId);
+
+  /// Add or update a personal checklist item for a member.
+  Future<void> upsertPersonalChecklistItem(
+    String tripId,
+    String ownerUserId,
+    ChecklistItem item,
+  );
+
+  /// Delete a personal checklist item for a member.
+  Future<void> deletePersonalChecklistItem(
+    String tripId,
+    String ownerUserId,
+    String itemId,
+  );
+
+  /// Update personal checklist visibility for a member.
+  Future<void> setPersonalChecklistVisibility(
+    String tripId,
+    String ownerUserId,
+    bool isShared,
+  );
 
   /// Request to join a trip.
   Future<void> requestToJoin(String tripId, JoinRequest request);
@@ -128,28 +151,66 @@ abstract class TripRepository {
   /// Stream of itinerary items for real-time updates.
   Stream<List<ItineraryItem>> watchItinerary(String tripId);
 
+  /// Fetch itinerary categories (canonical list).
+  Future<List<ItineraryCategory>> getItineraryCategories();
+
   /// Get or create user profile.
   Future<UserProfile?> getUserProfile(String userId);
 
   /// Update user profile.
   Future<void> updateUserProfile(UserProfile profile);
+
+  /// Search user profiles by available identity (name/email/handle/phone).
+  Future<List<UserProfile>> searchUserProfiles(String query);
+
+  /// Stream friends for the current user.
+  Stream<List<Friendship>> watchFriends();
+
+  /// Stream incoming friend requests (pending).
+  Stream<List<FriendRequest>> watchIncomingFriendRequests();
+
+  /// Stream outgoing friend requests (pending).
+  Stream<List<FriendRequest>> watchOutgoingFriendRequests();
+
+  /// Send a friend request to another user.
+  Future<void> sendFriendRequest(String toUserId);
+
+  /// Respond to a friend request.
+  Future<void> respondToFriendRequest(
+    String requestId,
+    FriendRequestStatus status,
+  );
+
+  /// Cancel a friend request that you sent.
+  Future<void> cancelFriendRequest(String requestId);
+
+  /// Remove an existing friend relationship.
+  Future<void> removeFriend(String friendUserId);
+
+  /// Block a user.
+  Future<void> blockUser(String blockedUserId);
+
+  /// Unblock a user.
+  Future<void> unblockUser(String blockedUserId);
+
+  /// Stream blocked users for the current user.
+  Stream<List<BlockedUser>> watchBlockedUsers();
 }
 
 class ChatMessagesCursor {
   final DateTime createdAt;
   final String messageId;
 
-  const ChatMessagesCursor({
-    required this.createdAt,
-    required this.messageId,
-  });
+  const ChatMessagesCursor({required this.createdAt, required this.messageId});
 }
 
 /// User profile information.
 class UserProfile {
   final String userId;
   final String displayName;
+  final String? handle;
   final String? email;
+  final String? phone;
   final String? photoUrl;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -157,7 +218,9 @@ class UserProfile {
   UserProfile({
     required this.userId,
     required this.displayName,
+    this.handle,
     this.email,
+    this.phone,
     this.photoUrl,
     required this.createdAt,
     required this.updatedAt,
@@ -167,7 +230,9 @@ class UserProfile {
   UserProfile copyWith({
     String? userId,
     String? displayName,
+    String? handle,
     String? email,
+    String? phone,
     String? photoUrl,
     DateTime? createdAt,
     DateTime? updatedAt,
@@ -175,7 +240,9 @@ class UserProfile {
     return UserProfile(
       userId: userId ?? this.userId,
       displayName: displayName ?? this.displayName,
+      handle: handle ?? this.handle,
       email: email ?? this.email,
+      phone: phone ?? this.phone,
       photoUrl: photoUrl ?? this.photoUrl,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -190,8 +257,14 @@ class UserProfile {
       'createdAt': Timestamp.fromDate(createdAt),
       'updatedAt': Timestamp.fromDate(updatedAt),
     };
+    if (handle != null) {
+      data['handle'] = handle;
+    }
     if (email != null) {
       data['email'] = email;
+    }
+    if (phone != null) {
+      data['phone'] = phone;
     }
     if (photoUrl != null) {
       data['photoUrl'] = photoUrl;
@@ -217,7 +290,9 @@ class UserProfile {
     return UserProfile(
       userId: data['userId'] as String? ?? '',
       displayName: data['displayName'] as String? ?? '',
+      handle: (data['handle'] ?? data['username']) as String?,
       email: data['email'] as String?,
+      phone: (data['phone'] ?? data['phoneNumber']) as String?,
       photoUrl: (data['photoUrl'] ?? data['avatarUrl']) as String?,
       createdAt: parseTimestamp(data['createdAt']),
       updatedAt: parseTimestamp(data['updatedAt']),

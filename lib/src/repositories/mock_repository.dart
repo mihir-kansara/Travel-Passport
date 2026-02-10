@@ -1,4 +1,5 @@
 import 'package:flutter_application_trial/src/models/trip.dart';
+import 'package:flutter_application_trial/src/models/friends.dart';
 import 'package:flutter_application_trial/src/repositories/repository.dart';
 import 'package:uuid/uuid.dart';
 import 'package:rxdart/rxdart.dart' show ConcatStream;
@@ -10,6 +11,10 @@ class MockTripRepository implements TripRepository {
   final List<Invite> _invites = [];
   final Map<String, List<WallComment>> _tripComments = {};
   final Map<String, Map<String, List<ItineraryComment>>> _itemComments = {};
+  final List<Friendship> _friendships = [];
+  final List<FriendRequest> _friendRequests = [];
+  final List<BlockedUser> _blockedUsers = [];
+  final Map<String, UserProfile> _mockProfiles = {};
 
   MockTripRepository({String currentUserId = 'user_1'})
     : _currentUserId = currentUserId {
@@ -37,8 +42,77 @@ class MockTripRepository implements TripRepository {
     );
   }
 
+  String _pairKey(String a, String b) {
+    final ids = [a, b]..sort();
+    return '${ids.first}_${ids.last}';
+  }
+
   void _initMockData() {
     final now = DateTime.now();
+    _mockProfiles
+      ..clear()
+      ..addAll({
+        _currentUserId: UserProfile(
+          userId: _currentUserId,
+          displayName: 'You',
+          handle: 'traveler_you',
+          email: 'you@example.com',
+          phone: '+1 415 555 0112',
+          photoUrl: null,
+          createdAt: now.subtract(const Duration(days: 220)),
+          updatedAt: now,
+        ),
+        'user_2': UserProfile(
+          userId: 'user_2',
+          displayName: 'Jane Smith',
+          handle: 'janesmith',
+          email: 'jane@example.com',
+          phone: '+1 415 555 0129',
+          photoUrl: null,
+          createdAt: now.subtract(const Duration(days: 410)),
+          updatedAt: now,
+        ),
+        'user_3': UserProfile(
+          userId: 'user_3',
+          displayName: 'Akshita Rao',
+          handle: 'akshitar',
+          email: 'akshita@example.com',
+          phone: '+1 415 555 0148',
+          photoUrl: null,
+          createdAt: now.subtract(const Duration(days: 510)),
+          updatedAt: now,
+        ),
+        'user_4': UserProfile(
+          userId: 'user_4',
+          displayName: 'Bhavesh Mehta',
+          handle: 'bhaveshm',
+          email: 'bhavesh@example.com',
+          phone: '+1 415 555 0162',
+          photoUrl: null,
+          createdAt: now.subtract(const Duration(days: 180)),
+          updatedAt: now,
+        ),
+        'user_5': UserProfile(
+          userId: 'user_5',
+          displayName: 'Nia Turner',
+          handle: 'niat',
+          email: 'nia@example.com',
+          phone: '+1 415 555 0198',
+          photoUrl: null,
+          createdAt: now.subtract(const Duration(days: 120)),
+          updatedAt: now,
+        ),
+        'user_6': UserProfile(
+          userId: 'user_6',
+          displayName: 'Luca Romano',
+          handle: 'lucar',
+          email: 'luca@example.com',
+          phone: '+39 334 555 0198',
+          photoUrl: null,
+          createdAt: now.subtract(const Duration(days: 90)),
+          updatedAt: now,
+        ),
+      });
     final currentUser = Member(
       userId: _currentUserId,
       name: 'You',
@@ -67,6 +141,44 @@ class MockTripRepository implements TripRepository {
       role: MemberRole.collaborator,
       joinedAt: now.subtract(const Duration(days: 2)),
     );
+
+    _friendships
+      ..clear()
+      ..addAll([
+        Friendship(
+          id: _pairKey(_currentUserId, 'user_2'),
+          userIds: [_currentUserId, 'user_2'],
+          createdAt: now.subtract(const Duration(days: 210)),
+          lastInteractionAt: now.subtract(const Duration(days: 3)),
+        ),
+        Friendship(
+          id: _pairKey(_currentUserId, 'user_3'),
+          userIds: [_currentUserId, 'user_3'],
+          createdAt: now.subtract(const Duration(days: 190)),
+          lastInteractionAt: now.subtract(const Duration(days: 1)),
+        ),
+      ]);
+
+    _friendRequests
+      ..clear()
+      ..addAll([
+        FriendRequest(
+          id: 'fr_1',
+          fromUserId: 'user_5',
+          toUserId: _currentUserId,
+          status: FriendRequestStatus.pending,
+          createdAt: now.subtract(const Duration(hours: 5)),
+        ),
+        FriendRequest(
+          id: 'fr_2',
+          fromUserId: _currentUserId,
+          toUserId: 'user_6',
+          status: FriendRequestStatus.pending,
+          createdAt: now.subtract(const Duration(hours: 2)),
+        ),
+      ]);
+
+    _blockedUsers.clear();
 
     _trips = [
       Trip(
@@ -316,7 +428,8 @@ class MockTripRepository implements TripRepository {
       ],
       itinerary: [],
       checklist: TripChecklist(
-        members: [MemberChecklist(userId: _currentUserId, updatedAt: now)],
+        personalItemsByUserId: {_currentUserId: const []},
+        personalVisibilityByUserId: {_currentUserId: false},
       ),
       updates: [update],
       createdAt: now,
@@ -473,6 +586,14 @@ class MockTripRepository implements TripRepository {
             joinedAt: DateTime.now(),
           ),
         ];
+      } else {
+        updatedMembers = updatedMembers
+            .map(
+              (member) => member.userId == req.userId
+                  ? member.copyWith(role: MemberRole.collaborator)
+                  : member,
+            )
+            .toList();
       }
     }
 
@@ -496,9 +617,9 @@ class MockTripRepository implements TripRepository {
         members: [...trip.members, member],
         updatedAt: DateTime.now(),
       );
-      final updatedChecklist = _upsertMemberChecklist(
+      final updatedChecklist = _ensurePersonalChecklist(
         trip.checklist,
-        MemberChecklist(userId: member.userId, updatedAt: DateTime.now()),
+        member.userId,
       );
       final update = _buildUpdate(
         actorId: member.userId,
@@ -519,8 +640,9 @@ class MockTripRepository implements TripRepository {
       (t) => t.id == tripId,
       orElse: () => throw Exception('Trip not found'),
     );
-    final updatedChecklist = trip.checklist.copyWith(
-      members: trip.checklist.members.where((m) => m.userId != userId).toList(),
+    final updatedChecklist = _removePersonalChecklist(
+      trip.checklist,
+      userId,
     );
     _trips[_trips.indexOf(trip)] = trip.copyWith(
       members: trip.members.where((m) => m.userId != userId).toList(),
@@ -530,22 +652,43 @@ class MockTripRepository implements TripRepository {
   }
 
   @override
-  Future<void> updateMemberChecklist(
+  Future<void> updateMemberRole(
     String tripId,
-    MemberChecklist checklist,
+    String userId,
+    MemberRole role,
   ) async {
     await Future.delayed(const Duration(milliseconds: 120));
     final trip = _trips.firstWhere(
       (t) => t.id == tripId,
       orElse: () => throw Exception('Trip not found'),
     );
-    final updatedChecklist = _upsertMemberChecklist(trip.checklist, checklist);
+    final memberIndex = trip.members.indexWhere((m) => m.userId == userId);
+    if (memberIndex < 0) return;
+    if (userId == trip.ownerId && role != MemberRole.owner) return;
+
+    var updatedOwnerId = trip.ownerId;
+    final updatedMembers = trip.members.map((member) {
+      if (member.userId == userId) {
+        return member.copyWith(role: role);
+      }
+      if (role == MemberRole.owner && member.role == MemberRole.owner) {
+        return member.copyWith(role: MemberRole.collaborator);
+      }
+      return member;
+    }).toList();
+
+    if (role == MemberRole.owner) {
+      updatedOwnerId = userId;
+    }
+
     _trips[_trips.indexOf(trip)] = trip.copyWith(
-      checklist: updatedChecklist,
+      ownerId: updatedOwnerId,
+      members: updatedMembers,
       updatedAt: DateTime.now(),
     );
   }
 
+  @override
   @override
   Future<void> upsertSharedChecklistItem(
     String tripId,
@@ -556,17 +699,17 @@ class MockTripRepository implements TripRepository {
       (t) => t.id == tripId,
       orElse: () => throw Exception('Trip not found'),
     );
-    final existingIndex = trip.checklist.shared.indexWhere(
+    final existingIndex = trip.checklist.sharedItems.indexWhere(
       (s) => s.id == item.id,
     );
-    final updatedShared = [...trip.checklist.shared];
+    final updatedShared = [...trip.checklist.sharedItems];
     if (existingIndex >= 0) {
       updatedShared[existingIndex] = item;
     } else {
       updatedShared.add(item);
     }
     _trips[_trips.indexOf(trip)] = trip.copyWith(
-      checklist: trip.checklist.copyWith(shared: updatedShared),
+      checklist: trip.checklist.copyWith(sharedItems: updatedShared),
       updatedAt: DateTime.now(),
     );
   }
@@ -578,29 +721,150 @@ class MockTripRepository implements TripRepository {
       (t) => t.id == tripId,
       orElse: () => throw Exception('Trip not found'),
     );
-    final updatedShared = trip.checklist.shared
+    final updatedShared = trip.checklist.sharedItems
         .where((s) => s.id != itemId)
         .toList();
     _trips[_trips.indexOf(trip)] = trip.copyWith(
-      checklist: trip.checklist.copyWith(shared: updatedShared),
+      checklist: trip.checklist.copyWith(sharedItems: updatedShared),
       updatedAt: DateTime.now(),
     );
   }
 
-  TripChecklist _upsertMemberChecklist(
-    TripChecklist checklist,
-    MemberChecklist entry,
-  ) {
-    final existingIndex = checklist.members.indexWhere(
-      (m) => m.userId == entry.userId,
+  @override
+  Future<void> upsertPersonalChecklistItem(
+    String tripId,
+    String ownerUserId,
+    ChecklistItem item,
+  ) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    final trip = _trips.firstWhere(
+      (t) => t.id == tripId,
+      orElse: () => throw Exception('Trip not found'),
     );
-    final updated = [...checklist.members];
+    final updatedChecklist = _upsertPersonalChecklistItem(
+      trip.checklist,
+      ownerUserId,
+      item,
+    );
+    _trips[_trips.indexOf(trip)] = trip.copyWith(
+      checklist: updatedChecklist,
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<void> deletePersonalChecklistItem(
+    String tripId,
+    String ownerUserId,
+    String itemId,
+  ) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    final trip = _trips.firstWhere(
+      (t) => t.id == tripId,
+      orElse: () => throw Exception('Trip not found'),
+    );
+    final updatedChecklist = _deletePersonalChecklistItem(
+      trip.checklist,
+      ownerUserId,
+      itemId,
+    );
+    _trips[_trips.indexOf(trip)] = trip.copyWith(
+      checklist: updatedChecklist,
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<void> setPersonalChecklistVisibility(
+    String tripId,
+    String ownerUserId,
+    bool isShared,
+  ) async {
+    await Future.delayed(const Duration(milliseconds: 120));
+    final trip = _trips.firstWhere(
+      (t) => t.id == tripId,
+      orElse: () => throw Exception('Trip not found'),
+    );
+    final updatedVisibility = Map<String, bool>.from(
+      trip.checklist.personalVisibilityByUserId,
+    )
+      ..[ownerUserId] = isShared;
+    _trips[_trips.indexOf(trip)] = trip.copyWith(
+      checklist: trip.checklist.copyWith(
+        personalVisibilityByUserId: updatedVisibility,
+      ),
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  TripChecklist _ensurePersonalChecklist(
+    TripChecklist checklist,
+    String userId,
+  ) {
+    final updatedItems = Map<String, List<ChecklistItem>>.from(
+      checklist.personalItemsByUserId,
+    );
+    updatedItems.putIfAbsent(userId, () => []);
+    final updatedVisibility = Map<String, bool>.from(
+      checklist.personalVisibilityByUserId,
+    );
+    updatedVisibility.putIfAbsent(userId, () => false);
+    return checklist.copyWith(
+      personalItemsByUserId: updatedItems,
+      personalVisibilityByUserId: updatedVisibility,
+    );
+  }
+
+  TripChecklist _removePersonalChecklist(
+    TripChecklist checklist,
+    String userId,
+  ) {
+    final updatedItems = Map<String, List<ChecklistItem>>.from(
+      checklist.personalItemsByUserId,
+    )
+      ..remove(userId);
+    final updatedVisibility = Map<String, bool>.from(
+      checklist.personalVisibilityByUserId,
+    )
+      ..remove(userId);
+    return checklist.copyWith(
+      personalItemsByUserId: updatedItems,
+      personalVisibilityByUserId: updatedVisibility,
+    );
+  }
+
+  TripChecklist _upsertPersonalChecklistItem(
+    TripChecklist checklist,
+    String ownerUserId,
+    ChecklistItem item,
+  ) {
+    final updatedItems = Map<String, List<ChecklistItem>>.from(
+      checklist.personalItemsByUserId,
+    );
+    final current =
+      [...updatedItems[ownerUserId] ?? const <ChecklistItem>[]];
+    final existingIndex = current.indexWhere((entry) => entry.id == item.id);
     if (existingIndex >= 0) {
-      updated[existingIndex] = entry;
+      current[existingIndex] = item;
     } else {
-      updated.add(entry);
+      current.add(item);
     }
-    return checklist.copyWith(members: updated);
+    updatedItems[ownerUserId] = current;
+    return checklist.copyWith(personalItemsByUserId: updatedItems);
+  }
+
+  TripChecklist _deletePersonalChecklistItem(
+    TripChecklist checklist,
+    String ownerUserId,
+    String itemId,
+  ) {
+    final updatedItems = Map<String, List<ChecklistItem>>.from(
+      checklist.personalItemsByUserId,
+    );
+    final current = [...updatedItems[ownerUserId] ?? const <ChecklistItem>[]]
+      ..removeWhere((entry) => entry.id == itemId);
+    updatedItems[ownerUserId] = current;
+    return checklist.copyWith(personalItemsByUserId: updatedItems);
   }
 
   @override
@@ -609,11 +873,18 @@ class MockTripRepository implements TripRepository {
     ItineraryItem item,
   ) async {
     await Future.delayed(const Duration(milliseconds: 200));
+    final prepared = item.copyWith(
+      createdBy: item.createdBy ?? _currentUserId,
+      updatedBy: _currentUserId,
+      updatedAt: DateTime.now(),
+    );
     final trip = _trips.firstWhere(
       (t) => t.id == tripId,
       orElse: () => throw Exception('Trip not found'),
     );
-    final existingIndex = trip.itinerary.indexWhere((i) => i.id == item.id);
+    final existingIndex = trip.itinerary.indexWhere(
+      (i) => i.id == prepared.id,
+    );
     final existingItem = existingIndex >= 0
         ? trip.itinerary[existingIndex]
         : null;
@@ -622,18 +893,18 @@ class MockTripRepository implements TripRepository {
 
     if (existingIndex >= 0) {
       updatedItinerary = [...trip.itinerary];
-      updatedItinerary[existingIndex] = item;
+      updatedItinerary[existingIndex] = prepared;
       if (existingItem != null &&
-          existingItem.isCompleted != item.isCompleted) {
-        updateText = item.isCompleted
-            ? 'Completed: ${item.title}.'
-            : 'Reopened: ${item.title}.';
+          existingItem.isCompleted != prepared.isCompleted) {
+        updateText = prepared.isCompleted
+            ? 'Completed: ${prepared.title}.'
+            : 'Reopened: ${prepared.title}.';
       } else {
-        updateText = 'Updated ${item.type.name}: ${item.title}.';
+        updateText = 'Updated ${prepared.title}.';
       }
     } else {
-      updatedItinerary = [...trip.itinerary, item];
-      updateText = 'Added ${item.type.name}: ${item.title}.';
+      updatedItinerary = [...trip.itinerary, prepared];
+      updateText = 'Added ${prepared.title}.';
     }
 
     final updated = trip.copyWith(
@@ -643,7 +914,7 @@ class MockTripRepository implements TripRepository {
     final update = _buildUpdate(text: updateText, kind: TripUpdateKind.planner);
     _trips[_trips.indexOf(trip)] = _withUpdate(updated, update);
 
-    return item;
+    return prepared;
   }
 
   @override
@@ -688,7 +959,12 @@ class MockTripRepository implements TripRepository {
     );
     final updatesById = {for (final item in items) item.id: item};
     final updatedItinerary = trip.itinerary.map((item) {
-      return updatesById[item.id] ?? item;
+      final override = updatesById[item.id];
+      if (override == null) return item;
+      return override.copyWith(
+        updatedBy: _currentUserId,
+        updatedAt: DateTime.now(),
+      );
     }).toList();
     final updatedTrip = trip.copyWith(
       itinerary: updatedItinerary,
@@ -719,6 +995,7 @@ class MockTripRepository implements TripRepository {
   Future<Invite> createInvite({
     required String tripId,
     String? invitedEmail,
+    MemberRole role = MemberRole.viewer,
   }) async {
     await Future.delayed(const Duration(milliseconds: 200));
     final invite = Invite(
@@ -729,6 +1006,7 @@ class MockTripRepository implements TripRepository {
       createdBy: _currentUserId,
       createdAt: DateTime.now(),
       expiresAt: DateTime.now().add(const Duration(days: 30)),
+      role: role,
     );
     _invites.add(invite);
     return invite;
@@ -739,7 +1017,7 @@ class MockTripRepository implements TripRepository {
     await Future.delayed(const Duration(milliseconds: 200));
     try {
       return _invites.firstWhere((invite) => invite.token == token);
-    } catch (e) {
+    } catch (_) {
       return null;
     }
   }
@@ -820,6 +1098,34 @@ class MockTripRepository implements TripRepository {
       Stream.value(getItems()),
       Stream.periodic(const Duration(seconds: 5), (_) => getItems()),
     ]);
+  }
+
+  @override
+  Future<List<ItineraryCategory>> getItineraryCategories() async {
+    return const [
+      ItineraryCategory(id: 'flight', label: 'Flight', icon: 'flight', order: 0),
+      ItineraryCategory(
+        id: 'lodging',
+        label: 'Lodging',
+        icon: 'hotel',
+        order: 1,
+      ),
+      ItineraryCategory(id: 'food', label: 'Food', icon: 'food', order: 2),
+      ItineraryCategory(
+        id: 'activity',
+        label: 'Activity',
+        icon: 'activity',
+        order: 3,
+      ),
+      ItineraryCategory(
+        id: 'transport',
+        label: 'Transport',
+        icon: 'transport',
+        order: 4,
+      ),
+      ItineraryCategory(id: 'note', label: 'Note', icon: 'note', order: 5),
+      ItineraryCategory(id: 'other', label: 'Other', icon: 'other', order: 6),
+    ];
   }
 
   @override
@@ -916,18 +1222,211 @@ class MockTripRepository implements TripRepository {
   @override
   Future<UserProfile?> getUserProfile(String userId) async {
     await Future.delayed(const Duration(milliseconds: 200));
-    return UserProfile(
-      userId: userId,
-      displayName: userId == _currentUserId ? 'You' : 'Jane Smith',
-      email: userId == _currentUserId ? 'you@example.com' : 'jane@example.com',
-      photoUrl: null,
-      createdAt: DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
+    return _mockProfiles[userId];
   }
 
   @override
   Future<void> updateUserProfile(UserProfile profile) async {
     await Future.delayed(const Duration(milliseconds: 200));
+    _mockProfiles[profile.userId] = profile;
+  }
+
+  @override
+  Future<List<UserProfile>> searchUserProfiles(String query) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    final trimmed = query.trim().toLowerCase();
+    if (trimmed.isEmpty) return [];
+    return _mockProfiles.values
+        .where((profile) {
+          if (profile.userId == _currentUserId) return false;
+          final values = [
+            profile.displayName,
+            profile.handle ?? '',
+            profile.email ?? '',
+            profile.phone ?? '',
+          ];
+          return values.any((value) => value.toLowerCase().contains(trimmed));
+        })
+        .toList();
+  }
+
+  @override
+  Stream<List<Friendship>> watchFriends() {
+    List<Friendship> getFriends() {
+      return _friendships
+          .where((friendship) =>
+              friendship.userIds.contains(_currentUserId))
+          .toList();
+    }
+
+    return ConcatStream([
+      Stream.value(getFriends()),
+      Stream.periodic(const Duration(seconds: 5), (_) => getFriends()),
+    ]);
+  }
+
+  @override
+  Stream<List<FriendRequest>> watchIncomingFriendRequests() {
+    List<FriendRequest> getRequests() {
+      return _friendRequests
+          .where((request) =>
+              request.toUserId == _currentUserId &&
+              request.status == FriendRequestStatus.pending)
+          .toList();
+    }
+
+    return ConcatStream([
+      Stream.value(getRequests()),
+      Stream.periodic(const Duration(seconds: 5), (_) => getRequests()),
+    ]);
+  }
+
+  @override
+  Stream<List<FriendRequest>> watchOutgoingFriendRequests() {
+    List<FriendRequest> getRequests() {
+      return _friendRequests
+          .where((request) =>
+              request.fromUserId == _currentUserId &&
+              request.status == FriendRequestStatus.pending)
+          .toList();
+    }
+
+    return ConcatStream([
+      Stream.value(getRequests()),
+      Stream.periodic(const Duration(seconds: 5), (_) => getRequests()),
+    ]);
+  }
+
+  @override
+  Future<void> sendFriendRequest(String toUserId) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    if (toUserId.isEmpty || toUserId == _currentUserId) return;
+    if (_blockedUsers.any((entry) =>
+        entry.blockerId == _currentUserId &&
+        entry.blockedUserId == toUserId)) {
+      return;
+    }
+    if (_blockedUsers.any((entry) =>
+        entry.blockerId == toUserId &&
+        entry.blockedUserId == _currentUserId)) {
+      return;
+    }
+    if (_friendships.any((friendship) =>
+        friendship.userIds.contains(_currentUserId) &&
+        friendship.userIds.contains(toUserId))) {
+      return;
+    }
+    if (_friendRequests.any((request) =>
+        request.fromUserId == _currentUserId &&
+        request.toUserId == toUserId &&
+        request.status == FriendRequestStatus.pending)) {
+      return;
+    }
+    _friendRequests.add(
+      FriendRequest(
+        id: const Uuid().v4(),
+        fromUserId: _currentUserId,
+        toUserId: toUserId,
+        status: FriendRequestStatus.pending,
+        createdAt: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
+  Future<void> respondToFriendRequest(
+    String requestId,
+    FriendRequestStatus status,
+  ) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    final index = _friendRequests.indexWhere((r) => r.id == requestId);
+    if (index < 0) return;
+    final request = _friendRequests[index];
+    if (request.toUserId != _currentUserId) return;
+    _friendRequests[index] = request.copyWith(
+      status: status,
+      respondedAt: DateTime.now(),
+    );
+    if (status == FriendRequestStatus.accepted) {
+      _friendships.add(
+        Friendship(
+          id: _pairKey(request.fromUserId, request.toUserId),
+          userIds: [request.fromUserId, request.toUserId],
+          createdAt: DateTime.now(),
+          lastInteractionAt: DateTime.now(),
+        ),
+      );
+    }
+  }
+
+  @override
+  Future<void> cancelFriendRequest(String requestId) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    final index = _friendRequests.indexWhere((r) => r.id == requestId);
+    if (index < 0) return;
+    final request = _friendRequests[index];
+    if (request.fromUserId != _currentUserId) return;
+    _friendRequests[index] = request.copyWith(
+      status: FriendRequestStatus.canceled,
+      respondedAt: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<void> removeFriend(String friendUserId) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    _friendships.removeWhere((friendship) =>
+        friendship.userIds.contains(_currentUserId) &&
+        friendship.userIds.contains(friendUserId));
+  }
+
+  @override
+  Future<void> blockUser(String blockedUserId) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    if (blockedUserId.isEmpty || blockedUserId == _currentUserId) return;
+    final existing = _blockedUsers.indexWhere((entry) =>
+        entry.blockerId == _currentUserId &&
+        entry.blockedUserId == blockedUserId);
+    if (existing >= 0) return;
+    _blockedUsers.add(
+      BlockedUser(
+        id: '${_currentUserId}_$blockedUserId',
+        blockerId: _currentUserId,
+        blockedUserId: blockedUserId,
+        createdAt: DateTime.now(),
+      ),
+    );
+    _friendships.removeWhere((friendship) =>
+        friendship.userIds.contains(_currentUserId) &&
+        friendship.userIds.contains(blockedUserId));
+    _friendRequests.removeWhere((request) =>
+        (request.fromUserId == _currentUserId &&
+            request.toUserId == blockedUserId &&
+            request.status == FriendRequestStatus.pending) ||
+        (request.fromUserId == blockedUserId &&
+            request.toUserId == _currentUserId &&
+            request.status == FriendRequestStatus.pending));
+  }
+
+  @override
+  Future<void> unblockUser(String blockedUserId) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    _blockedUsers.removeWhere((entry) =>
+        entry.blockerId == _currentUserId &&
+        entry.blockedUserId == blockedUserId);
+  }
+
+  @override
+  Stream<List<BlockedUser>> watchBlockedUsers() {
+    List<BlockedUser> getBlocked() {
+      return _blockedUsers
+          .where((entry) => entry.blockerId == _currentUserId)
+          .toList();
+    }
+
+    return ConcatStream([
+      Stream.value(getBlocked()),
+      Stream.periodic(const Duration(seconds: 5), (_) => getBlocked()),
+    ]);
   }
 }

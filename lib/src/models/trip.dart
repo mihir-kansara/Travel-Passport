@@ -19,7 +19,8 @@ class Trip {
   final TripStory story;
   final DateTime createdAt;
   final DateTime updatedAt;
-  final bool isPublished; // Whether the trip has been published as a public story
+  final bool
+  isPublished; // Whether the trip has been published as a public story
   final String? heroImageUrl; // Image for trip card/hero section
   final int? coverGradientId; // Gradient preset for cover when no image
 
@@ -433,7 +434,7 @@ class StoryMoment {
       id: data['id'] as String? ?? '',
       authorId: data['authorId'] as String? ?? '',
       caption: data['caption'] as String? ?? '',
-        createdAt: _parseTimestamp(data['createdAt']),
+      createdAt: _parseTimestamp(data['createdAt']),
       type: StoryMomentType.values.firstWhere(
         (t) => t.name == (data['type'] as String?),
         orElse: () => StoryMomentType.text,
@@ -574,41 +575,132 @@ class TripUpdate {
 }
 
 class TripChecklist {
-  final List<MemberChecklist> members;
-  final List<ChecklistItem> shared;
+  final List<ChecklistItem> sharedItems;
+  final Map<String, List<ChecklistItem>> personalItemsByUserId;
+  final Map<String, bool> personalVisibilityByUserId;
 
-  const TripChecklist({this.members = const [], this.shared = const []});
+  const TripChecklist({
+    this.sharedItems = const [],
+    this.personalItemsByUserId = const {},
+    this.personalVisibilityByUserId = const {},
+  });
 
   TripChecklist copyWith({
-    List<MemberChecklist>? members,
-    List<ChecklistItem>? shared,
+    List<ChecklistItem>? sharedItems,
+    Map<String, List<ChecklistItem>>? personalItemsByUserId,
+    Map<String, bool>? personalVisibilityByUserId,
   }) {
     return TripChecklist(
-      members: members ?? this.members,
-      shared: shared ?? this.shared,
+      sharedItems: sharedItems ?? this.sharedItems,
+      personalItemsByUserId:
+          personalItemsByUserId ?? this.personalItemsByUserId,
+      personalVisibilityByUserId:
+          personalVisibilityByUserId ?? this.personalVisibilityByUserId,
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
-      'members': members.map((m) => m.toJson()).toList(),
-      'shared': shared.map((s) => s.toJson()).toList(),
+      'sharedItems': sharedItems.map((s) => s.toJson()).toList(),
+      'personalItems': personalItemsByUserId.map(
+        (key, value) =>
+            MapEntry(key, value.map((item) => item.toJson()).toList()),
+      ),
+      'personalVisibility': personalVisibilityByUserId,
     };
   }
 
   factory TripChecklist.fromJson(Map<String, dynamic> data) {
-    return TripChecklist(
-      members:
+    final sharedItems =
+        (data['sharedItems'] as List<dynamic>? ??
+                data['shared'] as List<dynamic>?)
+            ?.map((s) => ChecklistItem.fromJson(s as Map<String, dynamic>))
+            .toList() ??
+        [];
+    final personalItemsRaw =
+        data['personalItems'] as Map<String, dynamic>? ??
+        data['personalItemsByUserId'] as Map<String, dynamic>?;
+    final personalItemsByUserId = <String, List<ChecklistItem>>{};
+    if (personalItemsRaw != null) {
+      personalItemsRaw.forEach((key, value) {
+        final list =
+            (value as List<dynamic>?)
+                ?.map(
+                  (item) =>
+                      ChecklistItem.fromJson(item as Map<String, dynamic>),
+                )
+                .toList() ??
+            [];
+        personalItemsByUserId[key] = list;
+      });
+    }
+
+    final personalVisibilityRaw =
+        data['personalVisibility'] as Map<String, dynamic>? ?? {};
+    final personalVisibilityByUserId = <String, bool>{
+      for (final entry in personalVisibilityRaw.entries)
+        entry.key: entry.value as bool? ?? false,
+    };
+
+    if (personalItemsByUserId.isEmpty && data['members'] is List<dynamic>) {
+      final legacy =
           (data['members'] as List<dynamic>?)
               ?.map((m) => MemberChecklist.fromJson(m as Map<String, dynamic>))
               .toList() ??
-          [],
-      shared:
-          (data['shared'] as List<dynamic>?)
-              ?.map((s) => ChecklistItem.fromJson(s as Map<String, dynamic>))
-              .toList() ??
-          [],
+          [];
+      for (final entry in legacy) {
+        personalItemsByUserId[entry.userId] = _legacyItemsForMember(entry);
+      }
+    }
+
+    for (final userId in personalItemsByUserId.keys) {
+      personalVisibilityByUserId.putIfAbsent(userId, () => false);
+    }
+
+    return TripChecklist(
+      sharedItems: sharedItems,
+      personalItemsByUserId: personalItemsByUserId,
+      personalVisibilityByUserId: personalVisibilityByUserId,
     );
+  }
+
+  static List<ChecklistItem> _legacyItemsForMember(MemberChecklist entry) {
+    final now = entry.updatedAt;
+    return [
+      ChecklistItem(
+        id: 'legacy-flight-${entry.userId}',
+        title: 'Flight booked',
+        isDone: entry.flightBooked,
+        isShared: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      ChecklistItem(
+        id: 'legacy-hotel-${entry.userId}',
+        title: 'Hotel booked',
+        isDone: entry.hotelBooked,
+        isShared: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      ChecklistItem(
+        id: 'legacy-reservations-${entry.userId}',
+        title: 'Reservations set',
+        isDone: entry.reservationsBooked,
+        isShared: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      ChecklistItem(
+        id: 'legacy-passport-${entry.userId}',
+        title: 'Passport ready',
+        isDone: entry.passportReady,
+        isCritical: true,
+        isShared: false,
+        createdAt: now,
+        updatedAt: now,
+      ),
+    ];
   }
 }
 
@@ -664,15 +756,24 @@ class MemberChecklist {
       hotelBooked: data['hotelBooked'] as bool? ?? false,
       reservationsBooked: data['reservationsBooked'] as bool? ?? false,
       passportReady: data['passportReady'] as bool? ?? false,
-        updatedAt: _parseTimestamp(data['updatedAt']),
+      updatedAt: _parseTimestamp(data['updatedAt']),
     );
   }
 }
+
+const Object _checklistItemSentinel = Object();
 
 class ChecklistItem {
   final String id;
   final String title;
   final bool isDone;
+  final String? notes;
+  final DateTime? dueDate;
+  final String? link;
+  final String? assignedUserId;
+  final bool isShared;
+  final bool isCritical;
+  final String? section;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -680,15 +781,46 @@ class ChecklistItem {
     required this.id,
     required this.title,
     this.isDone = false,
+    this.notes,
+    this.dueDate,
+    this.link,
+    this.assignedUserId,
+    this.isShared = false,
+    this.isCritical = false,
+    this.section,
     required this.createdAt,
     required this.updatedAt,
   });
 
-  ChecklistItem copyWith({String? title, bool? isDone, DateTime? updatedAt}) {
+  ChecklistItem copyWith({
+    String? title,
+    bool? isDone,
+    Object? notes = _checklistItemSentinel,
+    Object? dueDate = _checklistItemSentinel,
+    Object? link = _checklistItemSentinel,
+    Object? assignedUserId = _checklistItemSentinel,
+    bool? isShared,
+    bool? isCritical,
+    Object? section = _checklistItemSentinel,
+    DateTime? updatedAt,
+  }) {
     return ChecklistItem(
       id: id,
       title: title ?? this.title,
       isDone: isDone ?? this.isDone,
+      notes: notes == _checklistItemSentinel ? this.notes : notes as String?,
+      dueDate: dueDate == _checklistItemSentinel
+          ? this.dueDate
+          : dueDate as DateTime?,
+      link: link == _checklistItemSentinel ? this.link : link as String?,
+      assignedUserId: assignedUserId == _checklistItemSentinel
+          ? this.assignedUserId
+          : assignedUserId as String?,
+      isShared: isShared ?? this.isShared,
+      isCritical: isCritical ?? this.isCritical,
+      section: section == _checklistItemSentinel
+          ? this.section
+          : section as String?,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -699,6 +831,13 @@ class ChecklistItem {
       'id': id,
       'title': title,
       'isDone': isDone,
+      'notes': notes,
+      'dueDate': dueDate?.toIso8601String(),
+      'link': link,
+      'assignedUserId': assignedUserId,
+      'isShared': isShared,
+      'isCritical': isCritical,
+      'section': section,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
     };
@@ -709,8 +848,17 @@ class ChecklistItem {
       id: data['id'] as String? ?? '',
       title: data['title'] as String? ?? '',
       isDone: data['isDone'] as bool? ?? false,
-        createdAt: _parseTimestamp(data['createdAt']),
-        updatedAt: _parseTimestamp(data['updatedAt']),
+      notes: data['notes'] as String?,
+      dueDate: data['dueDate'] == null
+          ? null
+          : _parseTimestamp(data['dueDate']),
+      link: data['link'] as String?,
+      assignedUserId: data['assignedUserId'] as String?,
+      isShared: data['isShared'] as bool? ?? false,
+      isCritical: data['isCritical'] as bool? ?? false,
+      section: data['section'] as String?,
+      createdAt: _parseTimestamp(data['createdAt']),
+      updatedAt: _parseTimestamp(data['updatedAt']),
     );
   }
 }
@@ -759,7 +907,7 @@ class JoinRequest {
         (s) => s.name == (data['status'] as String?),
         orElse: () => JoinRequestStatus.pending,
       ),
-        createdAt: _parseTimestamp(data['createdAt']),
+      createdAt: _parseTimestamp(data['createdAt']),
     );
   }
 }
@@ -791,7 +939,7 @@ class ChatMessage {
       id: data['id'] as String? ?? '',
       authorId: data['authorId'] as String? ?? '',
       text: data['text'] as String? ?? '',
-        createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
+      createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
     );
   }
 }
@@ -805,12 +953,20 @@ class ItineraryItem {
   final String? description;
   final String? notes;
   final ItineraryItemType type;
+  final ItinerarySection section;
+  final bool isTimeSet;
+  final String? categoryId;
   final String? location;
   final String? imageUrl;
+  final List<String> photoUrls;
+  final double? cost;
+  final List<String> tags;
   final String? assignedTo; // User ID of assigned member
   final String? assigneeId;
   final String? assigneeName;
   final String? link;
+  final String? createdBy;
+  final String? updatedBy;
   final bool isCompleted;
   final ItineraryStatus status;
   final int order; // Sort order within the day
@@ -825,12 +981,20 @@ class ItineraryItem {
     this.description,
     this.notes,
     this.type = ItineraryItemType.activity,
+    this.section = ItinerarySection.morning,
+    this.isTimeSet = true,
+    this.categoryId,
     this.location,
     this.imageUrl,
+    this.photoUrls = const [],
+    this.cost,
+    this.tags = const [],
     this.assignedTo,
     this.assigneeId,
     this.assigneeName,
     this.link,
+    this.createdBy,
+    this.updatedBy,
     this.isCompleted = false,
     this.status = ItineraryStatus.planned,
     this.order = 0,
@@ -847,12 +1011,20 @@ class ItineraryItem {
     String? description,
     String? notes,
     ItineraryItemType? type,
+    ItinerarySection? section,
+    bool? isTimeSet,
+    String? categoryId,
     String? location,
     String? imageUrl,
+    List<String>? photoUrls,
+    double? cost,
+    List<String>? tags,
     String? assignedTo,
     String? assigneeId,
     String? assigneeName,
     String? link,
+    String? createdBy,
+    String? updatedBy,
     bool? isCompleted,
     ItineraryStatus? status,
     int? order,
@@ -867,12 +1039,20 @@ class ItineraryItem {
       description: description ?? this.description,
       notes: notes ?? this.notes,
       type: type ?? this.type,
+      section: section ?? this.section,
+      isTimeSet: isTimeSet ?? this.isTimeSet,
+      categoryId: categoryId ?? this.categoryId,
       location: location ?? this.location,
       imageUrl: imageUrl ?? this.imageUrl,
+      photoUrls: photoUrls ?? this.photoUrls,
+      cost: cost ?? this.cost,
+      tags: tags ?? this.tags,
       assignedTo: assignedTo ?? this.assignedTo,
       assigneeId: assigneeId ?? this.assigneeId,
       assigneeName: assigneeName ?? this.assigneeName,
       link: link ?? this.link,
+      createdBy: createdBy ?? this.createdBy,
+      updatedBy: updatedBy ?? this.updatedBy,
       isCompleted: isCompleted ?? this.isCompleted,
       status: status ?? this.status,
       order: order ?? this.order,
@@ -887,17 +1067,26 @@ class ItineraryItem {
       'id': id,
       'tripId': tripId,
       'dateTime': dateTime.toIso8601String(),
-      'dayKey': '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}',
+      'dayKey':
+          '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}',
       'title': title,
       'description': description,
       'notes': notes,
       'type': type.name,
+      'section': section.name,
+      'isTimeSet': isTimeSet,
+      'categoryId': categoryId,
       'location': location,
       'imageUrl': imageUrl,
+      'photoUrls': photoUrls,
+      'cost': cost,
+      'tags': tags,
       'assignedTo': assignedTo,
       'assigneeId': assigneeId,
       'assigneeName': assigneeName,
       'link': link,
+      'createdBy': createdBy,
+      'updatedBy': updatedBy,
       'isCompleted': isCompleted,
       'status': status.name,
       'manualOrder': order,
@@ -911,36 +1100,78 @@ class ItineraryItem {
   /// Create from Firestore document map.
   factory ItineraryItem.fromFirestore(Map<String, dynamic> data) {
     final assignedTo = data['assignedTo'] as String?;
+    final categoryId = data['categoryId'] as String?;
+    final type = ItineraryItemType.values.firstWhere(
+      (t) => t.name == (data['type'] as String?),
+      orElse: () => ItineraryItemType.activity,
+    );
+    final section = ItinerarySection.values.firstWhere(
+      (s) => s.name == (data['section'] as String?),
+      orElse: () => _inferSectionFromTime(_parseTimestamp(data['dateTime'])),
+    );
+    final isTimeSet = data['isTimeSet'] as bool? ?? true;
     return ItineraryItem(
       id: data['id'] as String? ?? '',
       tripId: data['tripId'] as String? ?? '',
-        dateTime: _parseTimestamp(data['dateTime']),
+      dateTime: _parseTimestamp(data['dateTime']),
       title: data['title'] as String? ?? '',
       description: data['description'] as String?,
       notes: data['notes'] as String?,
-      type: ItineraryItemType.values.firstWhere(
-        (t) => t.name == (data['type'] as String?),
-        orElse: () => ItineraryItemType.activity,
-      ),
+      type: type,
+      section: section,
+      isTimeSet: isTimeSet,
+      categoryId: categoryId ?? _legacyCategoryForType(type),
       location: data['location'] as String?,
       imageUrl: data['imageUrl'] as String?,
+      photoUrls: List<String>.from(data['photoUrls'] as List? ?? const []),
+      cost: (data['cost'] as num?)?.toDouble(),
+      tags: List<String>.from(data['tags'] as List? ?? const []),
       assignedTo: assignedTo,
       assigneeId: data['assigneeId'] as String? ?? assignedTo,
       assigneeName: data['assigneeName'] as String?,
       link: data['link'] as String?,
+      createdBy: data['createdBy'] as String?,
+      updatedBy: data['updatedBy'] as String?,
       isCompleted: data['isCompleted'] as bool? ?? false,
       status: _statusFromData(
         data['status'] as String?,
         data['isCompleted'] as bool? ?? false,
       ),
-        order: data['manualOrder'] as int? ?? data['order'] as int? ?? 0,
-        createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
-        updatedAt: _parseTimestamp(data['updatedAt']),
+      order: data['manualOrder'] as int? ?? data['order'] as int? ?? 0,
+      createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
+      updatedAt: _parseTimestamp(data['updatedAt']),
     );
   }
 
   @override
   String toString() => 'ItineraryItem(id: $id, title: $title, type: $type)';
+}
+
+class ItineraryCategory {
+  final String id;
+  final String label;
+  final String icon;
+  final int order;
+
+  const ItineraryCategory({
+    required this.id,
+    required this.label,
+    required this.icon,
+    this.order = 0,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {'id': id, 'label': label, 'icon': icon, 'order': order};
+  }
+
+  factory ItineraryCategory.fromJson(Map<String, dynamic> data) {
+    return ItineraryCategory(
+      id: data['id'] as String? ?? '',
+      label: data['label'] as String? ?? '',
+      icon: data['icon'] as String? ?? 'plan',
+      order: data['order'] as int? ?? 0,
+    );
+  }
 }
 
 /// Represents a member/collaborator in a trip.
@@ -949,6 +1180,7 @@ class Member {
   final String name;
   final String? email;
   final String? avatarUrl;
+  final String? invitedBy;
   final MemberRole role;
   final DateTime joinedAt;
 
@@ -957,6 +1189,7 @@ class Member {
     required this.name,
     this.email,
     this.avatarUrl,
+    this.invitedBy,
     this.role = MemberRole.collaborator,
     required this.joinedAt,
   });
@@ -967,6 +1200,7 @@ class Member {
     String? name,
     String? email,
     String? avatarUrl,
+    String? invitedBy,
     MemberRole? role,
     DateTime? joinedAt,
   }) {
@@ -975,6 +1209,7 @@ class Member {
       name: name ?? this.name,
       email: email ?? this.email,
       avatarUrl: avatarUrl ?? this.avatarUrl,
+      invitedBy: invitedBy ?? this.invitedBy,
       role: role ?? this.role,
       joinedAt: joinedAt ?? this.joinedAt,
     );
@@ -987,6 +1222,7 @@ class Member {
       'name': name,
       'email': email,
       'avatarUrl': avatarUrl,
+      'invitedBy': invitedBy,
       'role': role.name,
       'joinedAt': joinedAt.toIso8601String(),
     };
@@ -999,11 +1235,12 @@ class Member {
       name: data['name'] as String? ?? '',
       email: data['email'] as String?,
       avatarUrl: data['avatarUrl'] as String?,
+      invitedBy: data['invitedBy'] as String?,
       role: MemberRole.values.firstWhere(
         (r) => r.name == (data['role'] as String?),
         orElse: () => MemberRole.collaborator,
       ),
-        joinedAt: _parseTimestamp(data['joinedAt']),
+      joinedAt: _parseTimestamp(data['joinedAt']),
     );
   }
 
@@ -1021,6 +1258,7 @@ class Invite {
   final DateTime createdAt;
   final DateTime expiresAt;
   final bool isUsed;
+  final MemberRole role;
 
   Invite({
     required this.id,
@@ -1031,6 +1269,7 @@ class Invite {
     required this.createdAt,
     required this.expiresAt,
     this.isUsed = false,
+    this.role = MemberRole.viewer,
   });
 
   /// Check if invite is still valid.
@@ -1046,6 +1285,7 @@ class Invite {
     DateTime? createdAt,
     DateTime? expiresAt,
     bool? isUsed,
+    MemberRole? role,
   }) {
     return Invite(
       id: id ?? this.id,
@@ -1056,6 +1296,7 @@ class Invite {
       createdAt: createdAt ?? this.createdAt,
       expiresAt: expiresAt ?? this.expiresAt,
       isUsed: isUsed ?? this.isUsed,
+      role: role ?? this.role,
     );
   }
 
@@ -1070,6 +1311,7 @@ class Invite {
       'createdAt': createdAt.toIso8601String(),
       'expiresAt': expiresAt.toIso8601String(),
       'isUsed': isUsed,
+      'role': role.name,
     };
   }
 
@@ -1081,9 +1323,13 @@ class Invite {
       token: data['token'] as String? ?? '',
       invitedEmail: data['invitedEmail'] as String?,
       createdBy: data['createdBy'] as String? ?? '',
-        createdAt: _parseTimestamp(data['createdAt']),
-        expiresAt: _parseTimestamp(data['expiresAt']),
+      createdAt: _parseTimestamp(data['createdAt']),
+      expiresAt: _parseTimestamp(data['expiresAt']),
       isUsed: data['isUsed'] as bool? ?? false,
+      role: MemberRole.values.firstWhere(
+        (role) => role.name == (data['role'] as String?),
+        orElse: () => MemberRole.viewer,
+      ),
     );
   }
 
@@ -1125,6 +1371,8 @@ enum ItineraryItemType {
   other,
 }
 
+enum ItinerarySection { morning, afternoon, evening }
+
 enum ItineraryStatus { planned, booked, done }
 
 ItineraryStatus _statusFromData(String? value, bool isCompleted) {
@@ -1135,6 +1383,33 @@ ItineraryStatus _statusFromData(String? value, bool isCompleted) {
     );
   }
   return isCompleted ? ItineraryStatus.done : ItineraryStatus.planned;
+}
+
+ItinerarySection _inferSectionFromTime(DateTime dateTime) {
+  final hour = dateTime.hour;
+  if (hour < 12) return ItinerarySection.morning;
+  if (hour < 17) return ItinerarySection.afternoon;
+  return ItinerarySection.evening;
+}
+
+String _legacyCategoryForType(ItineraryItemType type) {
+  switch (type) {
+    case ItineraryItemType.flight:
+      return 'flight';
+    case ItineraryItemType.stay:
+    case ItineraryItemType.lodging:
+      return 'lodging';
+    case ItineraryItemType.food:
+      return 'food';
+    case ItineraryItemType.activity:
+      return 'activity';
+    case ItineraryItemType.transport:
+      return 'transport';
+    case ItineraryItemType.note:
+      return 'note';
+    case ItineraryItemType.other:
+      return 'other';
+  }
 }
 
 enum StoryMomentType { text, photo }

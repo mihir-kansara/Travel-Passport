@@ -1,7 +1,11 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:uuid/uuid.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
+import 'package:flutter_application_trial/src/models/friends.dart';
 import 'package:flutter_application_trial/src/repositories/repository.dart';
 
 /// Firestore implementation of TripRepository for real-time, cloud-backed trips.
@@ -20,8 +24,22 @@ class FirestoreTripRepository implements TripRepository {
       firestore.collection('invites');
   CollectionReference<Map<String, dynamic>> get _users =>
       firestore.collection('users');
+  CollectionReference<Map<String, dynamic>> get _friendRequests =>
+      firestore.collection('friend_requests');
+  CollectionReference<Map<String, dynamic>> get _friendships =>
+      firestore.collection('friendships');
+  CollectionReference<Map<String, dynamic>> get _blocks =>
+      firestore.collection('blocks');
+  CollectionReference<Map<String, dynamic>> get _itineraryCategories =>
+      firestore.collection('itinerary_categories');
 
-  CollectionReference<Map<String, dynamic>> _itineraryCollection(String tripId) {
+  final BehaviorSubject<List<_PendingItineraryOp>> _pendingOps =
+      BehaviorSubject.seeded(const []);
+  bool _pendingLoaded = false;
+
+  CollectionReference<Map<String, dynamic>> _itineraryCollection(
+    String tripId,
+  ) {
     return _trips.doc(tripId).collection('itinerary');
   }
 
@@ -46,13 +64,36 @@ class FirestoreTripRepository implements TripRepository {
     return '${dateTime.year}-$month-$day';
   }
 
+  String _pairKey(String a, String b) {
+    final ids = [a, b]..sort();
+    return '${ids.first}_${ids.last}';
+  }
+
+  int _sectionOrder(ItinerarySection section) {
+    switch (section) {
+      case ItinerarySection.morning:
+        return 0;
+      case ItinerarySection.afternoon:
+        return 1;
+      case ItinerarySection.evening:
+        return 2;
+    }
+  }
+
   List<ItineraryItem> _sortedItineraryItems(List<ItineraryItem> items) {
     final sorted = [...items];
     sorted.sort((a, b) {
       final dayCompare = _dayKey(a.dateTime).compareTo(_dayKey(b.dateTime));
       if (dayCompare != 0) return dayCompare;
+      final sectionCompare = _sectionOrder(
+        a.section,
+      ).compareTo(_sectionOrder(b.section));
+      if (sectionCompare != 0) return sectionCompare;
       final orderCompare = a.order.compareTo(b.order);
       if (orderCompare != 0) return orderCompare;
+      if (a.isTimeSet != b.isTimeSet) {
+        return a.isTimeSet ? -1 : 1;
+      }
       final timeCompare = a.dateTime.compareTo(b.dateTime);
       if (timeCompare != 0) return timeCompare;
       return a.id.compareTo(b.id);
@@ -129,12 +170,20 @@ class FirestoreTripRepository implements TripRepository {
       'description': item.description,
       'notes': item.notes,
       'type': item.type.name,
+      'section': item.section.name,
+      'isTimeSet': item.isTimeSet,
+      'categoryId': item.categoryId,
       'location': item.location,
       'imageUrl': item.imageUrl,
+      'photoUrls': item.photoUrls,
+      'cost': item.cost,
+      'tags': item.tags,
       'assignedTo': item.assignedTo,
       'assigneeId': item.assigneeId,
       'assigneeName': item.assigneeName,
       'link': item.link,
+      'createdBy': item.createdBy,
+      'updatedBy': item.updatedBy,
       'isCompleted': item.isCompleted,
       'status': item.status.name,
       'manualOrder': item.order,
@@ -147,6 +196,182 @@ class FirestoreTripRepository implements TripRepository {
           : FieldValue.serverTimestamp(),
       'createdAtClient': item.createdAt.toIso8601String(),
     };
+  }
+
+  Future<void> _ensurePendingLoaded() async {
+    if (_pendingLoaded) return;
+    _pendingLoaded = true;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_PendingItineraryOp.storageKey);
+    if (raw == null || raw.isEmpty) return;
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return;
+    final ops = decoded
+        .whereType<Map<String, dynamic>>()
+        .map(_PendingItineraryOp.fromJson)
+        .toList();
+    _pendingOps.add(ops);
+  }
+
+  Future<void> _persistPendingOps() async {
+    final prefs = await SharedPreferences.getInstance();
+    final payload = jsonEncode(
+      _pendingOps.value.map((op) => op.toJson()).toList(),
+    );
+    await prefs.setString(_PendingItineraryOp.storageKey, payload);
+  }
+
+  Future<void> _enqueuePending(_PendingItineraryOp op) async {
+    await _ensurePendingLoaded();
+    final updated = [..._pendingOps.value, op];
+    _pendingOps.add(updated);
+    await _persistPendingOps();
+  }
+
+  Future<void> _flushPendingOps() async {
+    await _ensurePendingLoaded();
+    final pending = [..._pendingOps.value];
+    if (pending.isEmpty) return;
+    final remaining = <_PendingItineraryOp>[];
+    for (final op in pending) {
+      try {
+        await _applyPendingOp(op);
+      } catch (_) {
+        remaining.add(op);
+        break;
+      }
+    }
+    if (remaining.length != pending.length) {
+      _pendingOps.add(remaining);
+      await _persistPendingOps();
+    }
+  }
+
+  List<ItineraryItem> _applyPendingOpsToItems(
+    List<ItineraryItem> base,
+    List<_PendingItineraryOp> ops,
+  ) {
+    if (ops.isEmpty) return base;
+    final items = [...base];
+    for (final op in ops) {
+      switch (op.type) {
+        case _PendingItineraryOpType.upsert:
+          final data = op.payload['item'];
+          if (data is Map<String, dynamic>) {
+            final item = ItineraryItem.fromFirestore(data);
+            final existingIndex = items.indexWhere(
+              (entry) => entry.id == item.id,
+            );
+            if (existingIndex >= 0) {
+              items[existingIndex] = item;
+            } else {
+              items.add(item);
+            }
+          }
+        case _PendingItineraryOpType.delete:
+          final itemId = op.payload['itemId'] as String?;
+          if (itemId != null) {
+            items.removeWhere((entry) => entry.id == itemId);
+          }
+        case _PendingItineraryOpType.reorder:
+          final updates = op.payload['orders'];
+          if (updates is List) {
+            for (final entry in updates) {
+              if (entry is! Map<String, dynamic>) continue;
+              final itemId = entry['id'] as String?;
+              final order = entry['order'] as int?;
+              if (itemId == null || order == null) continue;
+              final index = items.indexWhere((item) => item.id == itemId);
+              if (index >= 0) {
+                items[index] = items[index].copyWith(
+                  order: order,
+                  updatedAt: DateTime.now(),
+                );
+              }
+            }
+          }
+        case _PendingItineraryOpType.addComment:
+          break;
+      }
+    }
+    return _sortedItineraryItems(items);
+  }
+
+  Future<void> _applyPendingOp(_PendingItineraryOp op) async {
+    switch (op.type) {
+      case _PendingItineraryOpType.upsert:
+        final data = op.payload['item'];
+        if (data is! Map<String, dynamic>) return;
+        final item = ItineraryItem.fromFirestore(data);
+        final itemRef = _itineraryCollection(op.tripId).doc(item.id);
+        await itemRef.set(_itineraryDocData(item), SetOptions(merge: true));
+        await _appendTripUpdate(
+          op.tripId,
+          _buildUpdate(
+            text: 'Updated ${item.title}.',
+            kind: TripUpdateKind.planner,
+          ),
+        );
+      case _PendingItineraryOpType.delete:
+        final itemId = op.payload['itemId'] as String?;
+        if (itemId == null) return;
+        await _itineraryCollection(op.tripId).doc(itemId).delete();
+        await _appendTripUpdate(
+          op.tripId,
+          _buildUpdate(
+            text: 'Removed an itinerary item.',
+            kind: TripUpdateKind.planner,
+          ),
+        );
+      case _PendingItineraryOpType.reorder:
+        final updates = op.payload['orders'];
+        if (updates is! List) return;
+        final batch = firestore.batch();
+        final collection = _itineraryCollection(op.tripId);
+        for (final entry in updates) {
+          if (entry is! Map<String, dynamic>) continue;
+          final itemId = entry['id'] as String?;
+          final order = entry['order'] as int?;
+          if (itemId == null || order == null) continue;
+          batch.update(collection.doc(itemId), {
+            'manualOrder': order,
+            'order': order,
+            'updatedAt': FieldValue.serverTimestamp(),
+            'updatedBy': currentUserId,
+          });
+        }
+        await batch.commit();
+        await _appendTripUpdate(
+          op.tripId,
+          _buildUpdate(
+            text: 'Reordered the day plan.',
+            kind: TripUpdateKind.planner,
+          ),
+        );
+      case _PendingItineraryOpType.addComment:
+        final itemId = op.payload['itemId'] as String?;
+        final data = op.payload['comment'];
+        if (itemId == null || data is! Map<String, dynamic>) return;
+        final comment = ItineraryComment.fromJson(data);
+        await _itineraryCommentsCollection(
+          op.tripId,
+          itemId,
+        ).doc(comment.id).set(_itineraryCommentDocData(comment));
+        await _appendTripUpdate(
+          op.tripId,
+          _buildUpdate(
+            text: 'Added a comment to the itinerary.',
+            kind: TripUpdateKind.planner,
+          ),
+        );
+    }
+  }
+
+  Future<void> _appendTripUpdate(String tripId, TripUpdate update) async {
+    await _trips.doc(tripId).set({
+      'updates': FieldValue.arrayUnion([update.toJson()]),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Map<String, dynamic> _chatDocData(
@@ -213,10 +438,10 @@ class FirestoreTripRepository implements TripRepository {
     final batch = firestore.batch();
     final collection = _itineraryCollection(tripId);
     for (final item in legacyItems) {
-      batch.set(collection.doc(item.id), _itineraryDocData(
-        item,
-        preserveTimestamps: true,
-      ));
+      batch.set(
+        collection.doc(item.id),
+        _itineraryDocData(item, preserveTimestamps: true),
+      );
     }
     batch.update(_trips.doc(tripId), {
       'itinerary': [],
@@ -236,10 +461,10 @@ class FirestoreTripRepository implements TripRepository {
     final batch = firestore.batch();
     final collection = _messagesCollection(tripId);
     for (final message in legacyMessages) {
-      batch.set(collection.doc(message.id), _chatDocData(
-        message,
-        preserveTimestamps: true,
-      ));
+      batch.set(
+        collection.doc(message.id),
+        _chatDocData(message, preserveTimestamps: true),
+      );
     }
     batch.update(_trips.doc(tripId), {
       'chat': [],
@@ -259,10 +484,10 @@ class FirestoreTripRepository implements TripRepository {
     final batch = firestore.batch();
     final collection = _commentsCollection(tripId);
     for (final comment in legacyComments) {
-      batch.set(collection.doc(comment.id), _commentDocData(
-        comment,
-        preserveTimestamps: true,
-      ));
+      batch.set(
+        collection.doc(comment.id),
+        _commentDocData(comment, preserveTimestamps: true),
+      );
     }
     batch.update(_trips.doc(tripId), {
       'story.wallComments': [],
@@ -331,7 +556,8 @@ class FirestoreTripRepository implements TripRepository {
       ],
       itinerary: const [],
       checklist: TripChecklist(
-        members: [MemberChecklist(userId: currentUserId, updatedAt: now)],
+        personalItemsByUserId: {currentUserId: const []},
+        personalVisibilityByUserId: {currentUserId: false},
       ),
       updates: [update],
       createdAt: now,
@@ -366,9 +592,9 @@ class FirestoreTripRepository implements TripRepository {
       members: [...trip.members, member],
       updatedAt: DateTime.now(),
     );
-    final updatedChecklist = _upsertMemberChecklist(
+    final updatedChecklist = _ensurePersonalChecklist(
       trip.checklist,
-      MemberChecklist(userId: member.userId, updatedAt: DateTime.now()),
+      member.userId,
     );
     final update = _buildUpdate(
       actorId: member.userId,
@@ -384,9 +610,7 @@ class FirestoreTripRepository implements TripRepository {
   Future<void> removeMember(String tripId, String userId) async {
     final trip = await getTripById(tripId);
     if (trip == null) return;
-    final updatedChecklist = trip.checklist.copyWith(
-      members: trip.checklist.members.where((m) => m.userId != userId).toList(),
-    );
+    final updatedChecklist = _removePersonalChecklist(trip.checklist, userId);
     await _saveTrip(
       trip.copyWith(
         members: trip.members.where((m) => m.userId != userId).toList(),
@@ -397,33 +621,90 @@ class FirestoreTripRepository implements TripRepository {
   }
 
   @override
+  Future<void> updateMemberRole(
+    String tripId,
+    String userId,
+    MemberRole role,
+  ) async {
+    final trip = await getTripById(tripId);
+    if (trip == null) return;
+    final memberIndex = trip.members.indexWhere((m) => m.userId == userId);
+    if (memberIndex < 0) return;
+    if (userId == trip.ownerId && role != MemberRole.owner) return;
+
+    var updatedOwnerId = trip.ownerId;
+    final updatedMembers = trip.members.map((member) {
+      if (member.userId == userId) {
+        return member.copyWith(role: role);
+      }
+      if (role == MemberRole.owner && member.role == MemberRole.owner) {
+        return member.copyWith(role: MemberRole.collaborator);
+      }
+      return member;
+    }).toList();
+
+    if (role == MemberRole.owner) {
+      updatedOwnerId = userId;
+    }
+
+    await _saveTrip(
+      trip.copyWith(
+        ownerId: updatedOwnerId,
+        members: updatedMembers,
+        updatedAt: DateTime.now(),
+      ),
+    );
+  }
+
+  @override
   Future<ItineraryItem> upsertItineraryItem(
     String tripId,
     ItineraryItem item,
   ) async {
+    await _flushPendingOps();
     final itemRef = _itineraryCollection(tripId).doc(item.id);
     final existing = await itemRef.get();
-    var nextItem = item;
+    var nextItem = item.copyWith(
+      createdBy: item.createdBy ?? currentUserId,
+      updatedBy: currentUserId,
+      updatedAt: DateTime.now(),
+    );
     if (!existing.exists) {
       final nextOrder = await _nextOrderForDayInCollection(
         tripId,
         item.dateTime,
+        item.section,
       );
-      nextItem = item.copyWith(order: nextOrder);
+      nextItem = nextItem.copyWith(order: nextOrder);
     }
-    await itemRef.set(_itineraryDocData(nextItem), SetOptions(merge: true));
-    await _trips.doc(tripId).update({
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-    return nextItem;
+    try {
+      await itemRef.set(_itineraryDocData(nextItem), SetOptions(merge: true));
+      await _appendTripUpdate(
+        tripId,
+        _buildUpdate(
+          text: existing.exists
+              ? 'Updated ${nextItem.title}.'
+              : 'Added ${nextItem.title}.',
+          kind: TripUpdateKind.planner,
+        ),
+      );
+      return nextItem;
+    } catch (e) {
+      await _enqueuePending(
+        _PendingItineraryOp.upsert(tripId: tripId, item: nextItem),
+      );
+      return nextItem;
+    }
   }
 
   Future<int> _nextOrderForDayInCollection(
     String tripId,
     DateTime dateTime,
+    ItinerarySection section,
   ) async {
     final snapshot = await _itineraryCollection(tripId)
         .where('dayKey', isEqualTo: _dayKey(dateTime))
+        .where('section', isEqualTo: section.name)
         .get();
     if (snapshot.docs.isEmpty) return 0;
     var maxOrder = 0;
@@ -439,10 +720,21 @@ class FirestoreTripRepository implements TripRepository {
 
   @override
   Future<void> deleteItineraryItem(String tripId, String itemId) async {
-    await _itineraryCollection(tripId).doc(itemId).delete();
-    await _trips.doc(tripId).update({
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await _flushPendingOps();
+    try {
+      await _itineraryCollection(tripId).doc(itemId).delete();
+      await _appendTripUpdate(
+        tripId,
+        _buildUpdate(
+          text: 'Removed an itinerary item.',
+          kind: TripUpdateKind.planner,
+        ),
+      );
+    } catch (e) {
+      await _enqueuePending(
+        _PendingItineraryOp.delete(tripId: tripId, itemId: itemId),
+      );
+    }
   }
 
   @override
@@ -451,19 +743,31 @@ class FirestoreTripRepository implements TripRepository {
     List<ItineraryItem> items,
   ) async {
     if (items.isEmpty) return;
-    final batch = firestore.batch();
-    final collection = _itineraryCollection(tripId);
-    for (final item in items) {
-      batch.update(collection.doc(item.id), {
-        'manualOrder': item.order,
-        'order': item.order,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+    await _flushPendingOps();
+    try {
+      final batch = firestore.batch();
+      final collection = _itineraryCollection(tripId);
+      for (final item in items) {
+        batch.update(collection.doc(item.id), {
+          'manualOrder': item.order,
+          'order': item.order,
+          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedBy': currentUserId,
+        });
+      }
+      await batch.commit();
+      await _appendTripUpdate(
+        tripId,
+        _buildUpdate(
+          text: 'Reordered the day plan.',
+          kind: TripUpdateKind.planner,
+        ),
+      );
+    } catch (e) {
+      await _enqueuePending(
+        _PendingItineraryOp.reorder(tripId: tripId, items: items),
+      );
     }
-    batch.update(_trips.doc(tripId), {
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-    await batch.commit();
   }
 
   @override
@@ -471,16 +775,21 @@ class FirestoreTripRepository implements TripRepository {
     String tripId, {
     DateTime? day,
   }) async {
+    await _ensurePendingLoaded();
     Query<Map<String, dynamic>> query = _itineraryCollection(tripId);
     if (day != null) {
       query = query.where('dayKey', isEqualTo: _dayKey(day));
     }
     final snapshot = await query.get();
-    final items = _sortedItineraryItems(
+    final baseItems = _sortedItineraryItems(
       snapshot.docs
           .map((doc) => ItineraryItem.fromFirestore(doc.data()))
           .toList(),
     );
+    final pending = _pendingOps.value
+        .where((op) => op.tripId == tripId)
+        .toList();
+    final items = _applyPendingOpsToItems(baseItems, pending);
     if (items.isNotEmpty) return items;
     final trip = await getTripById(tripId);
     if (trip == null) return [];
@@ -495,6 +804,7 @@ class FirestoreTripRepository implements TripRepository {
   Future<Invite> createInvite({
     required String tripId,
     String? invitedEmail,
+    MemberRole role = MemberRole.viewer,
   }) async {
     final now = DateTime.now();
     final invite = Invite(
@@ -505,6 +815,7 @@ class FirestoreTripRepository implements TripRepository {
       createdBy: currentUserId,
       createdAt: now,
       expiresAt: now.add(const Duration(days: 30)),
+      role: role,
     );
     await _invites.doc(invite.id).set(invite.toFirestore());
     return invite;
@@ -584,9 +895,9 @@ class FirestoreTripRepository implements TripRepository {
 
   @override
   Future<void> addWallComment(String tripId, WallComment comment) async {
-    await _commentsCollection(tripId)
-        .doc(comment.id)
-        .set(_commentDocData(comment));
+    await _commentsCollection(
+      tripId,
+    ).doc(comment.id).set(_commentDocData(comment));
     await _trips.doc(tripId).set({
       'story': {
         'wallStats': {'comments': FieldValue.increment(1)},
@@ -597,28 +908,15 @@ class FirestoreTripRepository implements TripRepository {
 
   @override
   Future<void> sendChatMessage(String tripId, ChatMessage message) async {
-    await _messagesCollection(tripId)
-        .doc(message.id)
-        .set(_chatDocData(message));
+    await _messagesCollection(
+      tripId,
+    ).doc(message.id).set(_chatDocData(message));
     await _trips.doc(tripId).update({
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
   @override
-  Future<void> updateMemberChecklist(
-    String tripId,
-    MemberChecklist checklist,
-  ) async {
-    // TODO(travel-passport): Move checklists to a subcollection.
-    final trip = await getTripById(tripId);
-    if (trip == null) return;
-    final updatedChecklist = _upsertMemberChecklist(trip.checklist, checklist);
-    await _saveTrip(
-      trip.copyWith(checklist: updatedChecklist, updatedAt: DateTime.now()),
-    );
-  }
-
   @override
   Future<void> upsertSharedChecklistItem(
     String tripId,
@@ -627,10 +925,10 @@ class FirestoreTripRepository implements TripRepository {
     // TODO(travel-passport): Move checklists to a subcollection.
     final trip = await getTripById(tripId);
     if (trip == null) return;
-    final existingIndex = trip.checklist.shared.indexWhere(
+    final existingIndex = trip.checklist.sharedItems.indexWhere(
       (s) => s.id == item.id,
     );
-    final updatedShared = [...trip.checklist.shared];
+    final updatedShared = [...trip.checklist.sharedItems];
     if (existingIndex >= 0) {
       updatedShared[existingIndex] = item;
     } else {
@@ -638,7 +936,7 @@ class FirestoreTripRepository implements TripRepository {
     }
     await _saveTrip(
       trip.copyWith(
-        checklist: trip.checklist.copyWith(shared: updatedShared),
+        checklist: trip.checklist.copyWith(sharedItems: updatedShared),
         updatedAt: DateTime.now(),
       ),
     );
@@ -648,31 +946,141 @@ class FirestoreTripRepository implements TripRepository {
   Future<void> deleteSharedChecklistItem(String tripId, String itemId) async {
     final trip = await getTripById(tripId);
     if (trip == null) return;
-    final updatedShared = trip.checklist.shared
+    final updatedShared = trip.checklist.sharedItems
         .where((s) => s.id != itemId)
         .toList();
     await _saveTrip(
       trip.copyWith(
-        checklist: trip.checklist.copyWith(shared: updatedShared),
+        checklist: trip.checklist.copyWith(sharedItems: updatedShared),
         updatedAt: DateTime.now(),
       ),
     );
   }
 
-  TripChecklist _upsertMemberChecklist(
-    TripChecklist checklist,
-    MemberChecklist entry,
-  ) {
-    final existingIndex = checklist.members.indexWhere(
-      (m) => m.userId == entry.userId,
+  @override
+  Future<void> upsertPersonalChecklistItem(
+    String tripId,
+    String ownerUserId,
+    ChecklistItem item,
+  ) async {
+    // TODO(travel-passport): Move checklists to a subcollection.
+    final trip = await getTripById(tripId);
+    if (trip == null) return;
+    final updatedChecklist = _upsertPersonalChecklistItem(
+      trip.checklist,
+      ownerUserId,
+      item,
     );
-    final updated = [...checklist.members];
+    await _saveTrip(
+      trip.copyWith(checklist: updatedChecklist, updatedAt: DateTime.now()),
+    );
+  }
+
+  @override
+  Future<void> deletePersonalChecklistItem(
+    String tripId,
+    String ownerUserId,
+    String itemId,
+  ) async {
+    final trip = await getTripById(tripId);
+    if (trip == null) return;
+    final updatedChecklist = _deletePersonalChecklistItem(
+      trip.checklist,
+      ownerUserId,
+      itemId,
+    );
+    await _saveTrip(
+      trip.copyWith(checklist: updatedChecklist, updatedAt: DateTime.now()),
+    );
+  }
+
+  @override
+  Future<void> setPersonalChecklistVisibility(
+    String tripId,
+    String ownerUserId,
+    bool isShared,
+  ) async {
+    final trip = await getTripById(tripId);
+    if (trip == null) return;
+    final updatedVisibility = Map<String, bool>.from(
+      trip.checklist.personalVisibilityByUserId,
+    )..[ownerUserId] = isShared;
+    await _saveTrip(
+      trip.copyWith(
+        checklist: trip.checklist.copyWith(
+          personalVisibilityByUserId: updatedVisibility,
+        ),
+        updatedAt: DateTime.now(),
+      ),
+    );
+  }
+
+  TripChecklist _ensurePersonalChecklist(
+    TripChecklist checklist,
+    String userId,
+  ) {
+    final updatedItems = Map<String, List<ChecklistItem>>.from(
+      checklist.personalItemsByUserId,
+    );
+    updatedItems.putIfAbsent(userId, () => []);
+    final updatedVisibility = Map<String, bool>.from(
+      checklist.personalVisibilityByUserId,
+    );
+    updatedVisibility.putIfAbsent(userId, () => false);
+    return checklist.copyWith(
+      personalItemsByUserId: updatedItems,
+      personalVisibilityByUserId: updatedVisibility,
+    );
+  }
+
+  TripChecklist _removePersonalChecklist(
+    TripChecklist checklist,
+    String userId,
+  ) {
+    final updatedItems = Map<String, List<ChecklistItem>>.from(
+      checklist.personalItemsByUserId,
+    )..remove(userId);
+    final updatedVisibility = Map<String, bool>.from(
+      checklist.personalVisibilityByUserId,
+    )..remove(userId);
+    return checklist.copyWith(
+      personalItemsByUserId: updatedItems,
+      personalVisibilityByUserId: updatedVisibility,
+    );
+  }
+
+  TripChecklist _upsertPersonalChecklistItem(
+    TripChecklist checklist,
+    String ownerUserId,
+    ChecklistItem item,
+  ) {
+    final updatedItems = Map<String, List<ChecklistItem>>.from(
+      checklist.personalItemsByUserId,
+    );
+    final current =
+      [...updatedItems[ownerUserId] ?? const <ChecklistItem>[]];
+    final existingIndex = current.indexWhere((entry) => entry.id == item.id);
     if (existingIndex >= 0) {
-      updated[existingIndex] = entry;
+      current[existingIndex] = item;
     } else {
-      updated.add(entry);
+      current.add(item);
     }
-    return checklist.copyWith(members: updated);
+    updatedItems[ownerUserId] = current;
+    return checklist.copyWith(personalItemsByUserId: updatedItems);
+  }
+
+  TripChecklist _deletePersonalChecklistItem(
+    TripChecklist checklist,
+    String ownerUserId,
+    String itemId,
+  ) {
+    final updatedItems = Map<String, List<ChecklistItem>>.from(
+      checklist.personalItemsByUserId,
+    );
+    final current = [...updatedItems[ownerUserId] ?? const <ChecklistItem>[]]
+      ..removeWhere((entry) => entry.id == itemId);
+    updatedItems[ownerUserId] = current;
+    return checklist.copyWith(personalItemsByUserId: updatedItems);
   }
 
   @override
@@ -704,11 +1112,11 @@ class FirestoreTripRepository implements TripRepository {
     if (status == JoinRequestStatus.approved) {
       final req = updatedRequests.firstWhere((r) => r.id == requestId);
       final exists = updatedMembers.any((m) => m.userId == req.userId);
+      final profile = await getUserProfile(req.userId);
+      final displayName = profile?.displayName.isNotEmpty == true
+          ? profile!.displayName
+          : 'Traveler';
       if (!exists) {
-        final profile = await getUserProfile(req.userId);
-        final displayName = profile?.displayName.isNotEmpty == true
-            ? profile!.displayName
-            : 'Traveler';
         updatedMembers = [
           ...updatedMembers,
           Member(
@@ -719,6 +1127,14 @@ class FirestoreTripRepository implements TripRepository {
             joinedAt: DateTime.now(),
           ),
         ];
+      } else {
+        updatedMembers = updatedMembers
+            .map(
+              (member) => member.userId == req.userId
+                  ? member.copyWith(role: MemberRole.collaborator)
+                  : member,
+            )
+            .toList();
       }
     }
 
@@ -750,6 +1166,7 @@ class FirestoreTripRepository implements TripRepository {
 
   @override
   Stream<List<ItineraryItem>> watchItinerary(String tripId) {
+    _ensurePendingLoaded();
     final subStream = _itineraryCollection(tripId).snapshots().map(
       (snapshot) => _sortedItineraryItems(
         snapshot.docs
@@ -762,46 +1179,54 @@ class FirestoreTripRepository implements TripRepository {
       await _migrateItineraryIfNeeded(tripId, legacyItems);
       return legacyItems;
     });
-    return Rx.combineLatest2<List<ItineraryItem>, List<ItineraryItem>,
-        List<ItineraryItem>>(
-      subStream,
-      legacyStream,
-      (subItems, legacyItems) =>
-          subItems.isNotEmpty ? subItems : legacyItems,
-    );
+    return Rx.combineLatest3<
+      List<ItineraryItem>,
+      List<ItineraryItem>,
+      List<_PendingItineraryOp>,
+      List<ItineraryItem>
+    >(subStream, legacyStream, _pendingOps.stream, (
+      subItems,
+      legacyItems,
+      pendingOps,
+    ) {
+      final base = subItems.isNotEmpty ? subItems : legacyItems;
+      final filtered = pendingOps.where((op) => op.tripId == tripId).toList();
+      return _applyPendingOpsToItems(base, filtered);
+    });
   }
 
   @override
-  Stream<List<WallComment>> watchTripComments(String tripId, {int limit = 100}) {
+  Stream<List<WallComment>> watchTripComments(
+    String tripId, {
+    int limit = 100,
+  }) {
     final subStream = _commentsCollection(tripId)
         .orderBy('createdAt')
         .limit(limit)
         .snapshots()
         .map(
-          (snapshot) =>
-              snapshot.docs.map((doc) {
-                return WallComment.fromJson(doc.data());
-              }).toList(),
+          (snapshot) => snapshot.docs.map((doc) {
+            return WallComment.fromJson(doc.data());
+          }).toList(),
         );
     final legacyStream = watchTrip(tripId).asyncMap((trip) async {
       final legacy = trip?.story.wallComments ?? [];
       await _migrateWallCommentsIfNeeded(tripId, legacy);
       return legacy;
     });
-    return Rx.combineLatest2<List<WallComment>, List<WallComment>,
-        List<WallComment>>(
+    return Rx.combineLatest2<
+      List<WallComment>,
+      List<WallComment>,
+      List<WallComment>
+    >(
       subStream,
       legacyStream,
-      (subItems, legacyItems) =>
-          subItems.isNotEmpty ? subItems : legacyItems,
+      (subItems, legacyItems) => subItems.isNotEmpty ? subItems : legacyItems,
     );
   }
 
   @override
-  Stream<List<ChatMessage>> watchChatMessages(
-    String tripId, {
-    int limit = 50,
-  }) {
+  Stream<List<ChatMessage>> watchChatMessages(String tripId, {int limit = 50}) {
     final subStream = _messagesCollection(tripId)
         .orderBy('createdAt', descending: true)
         .limit(limit)
@@ -818,12 +1243,14 @@ class FirestoreTripRepository implements TripRepository {
       await _migrateChatIfNeeded(tripId, legacy);
       return legacy;
     });
-    return Rx.combineLatest2<List<ChatMessage>, List<ChatMessage>,
-        List<ChatMessage>>(
+    return Rx.combineLatest2<
+      List<ChatMessage>,
+      List<ChatMessage>,
+      List<ChatMessage>
+    >(
       subStream,
       legacyStream,
-      (subItems, legacyItems) =>
-          subItems.isNotEmpty ? subItems : legacyItems,
+      (subItems, legacyItems) => subItems.isNotEmpty ? subItems : legacyItems,
     );
   }
 
@@ -833,19 +1260,15 @@ class FirestoreTripRepository implements TripRepository {
     int limit = 50,
     ChatMessagesCursor? before,
   }) async {
-    var query = _messagesCollection(tripId)
-        .orderBy('createdAt', descending: true)
-        .limit(limit);
+    var query = _messagesCollection(
+      tripId,
+    ).orderBy('createdAt', descending: true).limit(limit);
     if (before != null) {
-      query = query.startAfter([
-        Timestamp.fromDate(before.createdAt),
-      ]);
+      query = query.startAfter([Timestamp.fromDate(before.createdAt)]);
     }
     final snapshot = await query.get();
     return _sortedChatMessages(
-      snapshot.docs
-          .map((doc) => ChatMessage.fromJson(doc.data()))
-          .toList(),
+      snapshot.docs.map((doc) => ChatMessage.fromJson(doc.data())).toList(),
     );
   }
 
@@ -858,10 +1281,9 @@ class FirestoreTripRepository implements TripRepository {
         .orderBy('createdAt')
         .snapshots()
         .map(
-          (snapshot) =>
-              snapshot.docs.map((doc) {
-                return ItineraryComment.fromJson(doc.data());
-              }).toList(),
+          (snapshot) => snapshot.docs.map((doc) {
+            return ItineraryComment.fromJson(doc.data());
+          }).toList(),
         );
   }
 
@@ -871,12 +1293,39 @@ class FirestoreTripRepository implements TripRepository {
     String itemId,
     ItineraryComment comment,
   ) async {
-    await _itineraryCommentsCollection(tripId, itemId)
-        .doc(comment.id)
-        .set(_itineraryCommentDocData(comment));
-    await _itineraryCollection(tripId).doc(itemId).update({
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await _flushPendingOps();
+    try {
+      await _itineraryCommentsCollection(
+        tripId,
+        itemId,
+      ).doc(comment.id).set(_itineraryCommentDocData(comment));
+      await _appendTripUpdate(
+        tripId,
+        _buildUpdate(
+          text: 'Added a comment to the itinerary.',
+          kind: TripUpdateKind.planner,
+        ),
+      );
+    } catch (e) {
+      await _enqueuePending(
+        _PendingItineraryOp.addComment(
+          tripId: tripId,
+          itemId: itemId,
+          comment: comment,
+        ),
+      );
+    }
+  }
+
+  @override
+  Future<List<ItineraryCategory>> getItineraryCategories() async {
+    final snapshot = await _itineraryCategories.orderBy('order').get();
+    final categories = snapshot.docs
+        .map((doc) => ItineraryCategory.fromJson(doc.data()))
+        .where((entry) => entry.id.isNotEmpty)
+        .toList();
+    if (categories.isNotEmpty) return categories;
+    return _defaultCategories;
   }
 
   @override
@@ -893,5 +1342,357 @@ class FirestoreTripRepository implements TripRepository {
     await _users
         .doc(profile.userId)
         .set(profile.toFirestore(), SetOptions(merge: true));
+  }
+
+  @override
+  Future<List<UserProfile>> searchUserProfiles(String query) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return [];
+    final isEmail = trimmed.contains('@');
+    final isPhone = RegExp(r'^[+\d][\d\s\-()]{5,}$').hasMatch(trimmed);
+    final handle = trimmed.startsWith('@') ? trimmed.substring(1) : trimmed;
+    final futures = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
+
+    futures.add(
+      _users
+          .where('displayName', isGreaterThanOrEqualTo: trimmed)
+          .where('displayName', isLessThan: '${trimmed}\uf8ff')
+          .limit(12)
+          .get(),
+    );
+    if (isEmail) {
+      futures.add(_users.where('email', isEqualTo: trimmed).limit(1).get());
+    }
+    if (isPhone) {
+      futures.add(_users.where('phone', isEqualTo: trimmed).limit(1).get());
+    }
+    futures.add(_users.where('handle', isEqualTo: handle).limit(1).get());
+    futures.add(_users.where('username', isEqualTo: handle).limit(1).get());
+
+    final snapshots = await Future.wait(futures);
+    final profiles = <String, UserProfile>{};
+    for (final snapshot in snapshots) {
+      for (final doc in snapshot.docs) {
+        final profile = UserProfile.fromFirestore(doc.data());
+        if (profile.userId.isEmpty || profile.userId == currentUserId) continue;
+        profiles[profile.userId] = profile;
+      }
+    }
+    return profiles.values.toList();
+  }
+
+  @override
+  Stream<List<Friendship>> watchFriends() {
+    return _friendships
+        .where('userIds', arrayContains: currentUserId)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map((doc) => Friendship.fromFirestore(doc.data()))
+              .toList(),
+        );
+  }
+
+  @override
+  Stream<List<FriendRequest>> watchIncomingFriendRequests() {
+    return _friendRequests
+        .where('toUserId', isEqualTo: currentUserId)
+        .where('status', isEqualTo: FriendRequestStatus.pending.name)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map((doc) => FriendRequest.fromFirestore(doc.data()))
+              .toList(),
+        );
+  }
+
+  @override
+  Stream<List<FriendRequest>> watchOutgoingFriendRequests() {
+    return _friendRequests
+        .where('fromUserId', isEqualTo: currentUserId)
+        .where('status', isEqualTo: FriendRequestStatus.pending.name)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map((doc) => FriendRequest.fromFirestore(doc.data()))
+              .toList(),
+        );
+  }
+
+  @override
+  Future<void> sendFriendRequest(String toUserId) async {
+    if (toUserId.isEmpty || toUserId == currentUserId) return;
+    final pairKey = _pairKey(currentUserId, toUserId);
+    final friendshipDoc = await _friendships.doc(pairKey).get();
+    if (friendshipDoc.exists) return;
+    final blockingDoc = await _blocks.doc('${currentUserId}_$toUserId').get();
+    if (blockingDoc.exists) return;
+    final blockedByDoc = await _blocks.doc('${toUserId}_$currentUserId').get();
+    if (blockedByDoc.exists) return;
+
+    final existingOutgoing = await _friendRequests
+        .where('fromUserId', isEqualTo: currentUserId)
+        .where('toUserId', isEqualTo: toUserId)
+        .where('status', isEqualTo: FriendRequestStatus.pending.name)
+        .limit(1)
+        .get();
+    if (existingOutgoing.docs.isNotEmpty) return;
+
+    final existingIncoming = await _friendRequests
+        .where('fromUserId', isEqualTo: toUserId)
+        .where('toUserId', isEqualTo: currentUserId)
+        .where('status', isEqualTo: FriendRequestStatus.pending.name)
+        .limit(1)
+        .get();
+    if (existingIncoming.docs.isNotEmpty) return;
+
+    final requestId = const Uuid().v4();
+    final request = FriendRequest(
+      id: requestId,
+      fromUserId: currentUserId,
+      toUserId: toUserId,
+      status: FriendRequestStatus.pending,
+      createdAt: DateTime.now(),
+    );
+
+    await _friendRequests.doc(requestId).set({
+      ...request.toFirestore(),
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
+  Future<void> respondToFriendRequest(
+    String requestId,
+    FriendRequestStatus status,
+  ) async {
+    final doc = await _friendRequests.doc(requestId).get();
+    if (!doc.exists) return;
+    final data = doc.data();
+    if (data == null) return;
+    final request = FriendRequest.fromFirestore(data);
+    if (request.toUserId != currentUserId) return;
+
+    final batch = firestore.batch();
+    batch.update(doc.reference, {
+      'status': status.name,
+      'respondedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (status == FriendRequestStatus.accepted) {
+      final pairKey = _pairKey(request.fromUserId, request.toUserId);
+      final friendship = Friendship(
+        id: pairKey,
+        userIds: [request.fromUserId, request.toUserId]..sort(),
+        createdAt: DateTime.now(),
+      );
+      batch.set(_friendships.doc(pairKey), {
+        ...friendship.toFirestore(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
+  }
+
+  @override
+  Future<void> cancelFriendRequest(String requestId) async {
+    final doc = await _friendRequests.doc(requestId).get();
+    if (!doc.exists) return;
+    final data = doc.data();
+    if (data == null) return;
+    final request = FriendRequest.fromFirestore(data);
+    if (request.fromUserId != currentUserId) return;
+    await _friendRequests.doc(requestId).update({
+      'status': FriendRequestStatus.canceled.name,
+      'respondedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
+  Future<void> removeFriend(String friendUserId) async {
+    if (friendUserId.isEmpty || friendUserId == currentUserId) return;
+    final pairKey = _pairKey(currentUserId, friendUserId);
+    await _friendships.doc(pairKey).delete();
+  }
+
+  @override
+  Future<void> blockUser(String blockedUserId) async {
+    if (blockedUserId.isEmpty || blockedUserId == currentUserId) return;
+    final blockId = '${currentUserId}_$blockedUserId';
+    final batch = firestore.batch();
+    batch.set(_blocks.doc(blockId), {
+      'id': blockId,
+      'blockerId': currentUserId,
+      'blockedUserId': blockedUserId,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    final pairKey = _pairKey(currentUserId, blockedUserId);
+    batch.delete(_friendships.doc(pairKey));
+
+    final outgoing = await _friendRequests
+        .where('fromUserId', isEqualTo: currentUserId)
+        .where('toUserId', isEqualTo: blockedUserId)
+        .where('status', isEqualTo: FriendRequestStatus.pending.name)
+        .get();
+    for (final doc in outgoing.docs) {
+      batch.update(doc.reference, {
+        'status': FriendRequestStatus.canceled.name,
+        'respondedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    final incoming = await _friendRequests
+        .where('fromUserId', isEqualTo: blockedUserId)
+        .where('toUserId', isEqualTo: currentUserId)
+        .where('status', isEqualTo: FriendRequestStatus.pending.name)
+        .get();
+    for (final doc in incoming.docs) {
+      batch.update(doc.reference, {
+        'status': FriendRequestStatus.declined.name,
+        'respondedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
+  }
+
+  @override
+  Future<void> unblockUser(String blockedUserId) async {
+    if (blockedUserId.isEmpty || blockedUserId == currentUserId) return;
+    final blockId = '${currentUserId}_$blockedUserId';
+    await _blocks.doc(blockId).delete();
+  }
+
+  @override
+  Stream<List<BlockedUser>> watchBlockedUsers() {
+    return _blocks
+        .where('blockerId', isEqualTo: currentUserId)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map((doc) => BlockedUser.fromFirestore(doc.data()))
+              .toList(),
+        );
+  }
+}
+
+const List<ItineraryCategory> _defaultCategories = [
+  ItineraryCategory(id: 'flight', label: 'Flight', icon: 'flight', order: 0),
+  ItineraryCategory(id: 'lodging', label: 'Lodging', icon: 'hotel', order: 1),
+  ItineraryCategory(id: 'food', label: 'Food', icon: 'food', order: 2),
+  ItineraryCategory(
+    id: 'activity',
+    label: 'Activity',
+    icon: 'activity',
+    order: 3,
+  ),
+  ItineraryCategory(
+    id: 'transport',
+    label: 'Transport',
+    icon: 'transport',
+    order: 4,
+  ),
+  ItineraryCategory(id: 'note', label: 'Note', icon: 'note', order: 5),
+  ItineraryCategory(id: 'other', label: 'Other', icon: 'other', order: 6),
+];
+
+enum _PendingItineraryOpType { upsert, delete, reorder, addComment }
+
+class _PendingItineraryOp {
+  static const storageKey = 'pending_itinerary_ops';
+  final _PendingItineraryOpType type;
+  final String tripId;
+  final Map<String, dynamic> payload;
+  final DateTime createdAt;
+
+  const _PendingItineraryOp({
+    required this.type,
+    required this.tripId,
+    required this.payload,
+    required this.createdAt,
+  });
+
+  factory _PendingItineraryOp.upsert({
+    required String tripId,
+    required ItineraryItem item,
+  }) {
+    return _PendingItineraryOp(
+      type: _PendingItineraryOpType.upsert,
+      tripId: tripId,
+      payload: {'item': item.toFirestore()},
+      createdAt: DateTime.now(),
+    );
+  }
+
+  factory _PendingItineraryOp.delete({
+    required String tripId,
+    required String itemId,
+  }) {
+    return _PendingItineraryOp(
+      type: _PendingItineraryOpType.delete,
+      tripId: tripId,
+      payload: {'itemId': itemId},
+      createdAt: DateTime.now(),
+    );
+  }
+
+  factory _PendingItineraryOp.reorder({
+    required String tripId,
+    required List<ItineraryItem> items,
+  }) {
+    return _PendingItineraryOp(
+      type: _PendingItineraryOpType.reorder,
+      tripId: tripId,
+      payload: {
+        'orders': items
+            .map((item) => {'id': item.id, 'order': item.order})
+            .toList(),
+      },
+      createdAt: DateTime.now(),
+    );
+  }
+
+  factory _PendingItineraryOp.addComment({
+    required String tripId,
+    required String itemId,
+    required ItineraryComment comment,
+  }) {
+    return _PendingItineraryOp(
+      type: _PendingItineraryOpType.addComment,
+      tripId: tripId,
+      payload: {'itemId': itemId, 'comment': comment.toJson()},
+      createdAt: DateTime.now(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'type': type.name,
+      'tripId': tripId,
+      'payload': payload,
+      'createdAt': createdAt.toIso8601String(),
+    };
+  }
+
+  factory _PendingItineraryOp.fromJson(Map<String, dynamic> data) {
+    DateTime parseTimestamp(dynamic value) {
+      if (value is DateTime) return value;
+      if (value is String && value.isNotEmpty) {
+        return DateTime.tryParse(value) ?? DateTime.now();
+      }
+      return DateTime.now();
+    }
+
+    return _PendingItineraryOp(
+      type: _PendingItineraryOpType.values.firstWhere(
+        (entry) => entry.name == (data['type'] as String?),
+        orElse: () => _PendingItineraryOpType.upsert,
+      ),
+      tripId: data['tripId'] as String? ?? '',
+      payload: Map<String, dynamic>.from(data['payload'] as Map? ?? {}),
+      createdAt: parseTimestamp(data['createdAt']),
+    );
   }
 }

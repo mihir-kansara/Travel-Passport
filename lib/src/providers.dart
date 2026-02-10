@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_application_trial/src/models/auth.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
+import 'package:flutter_application_trial/src/models/friends.dart';
 import 'package:flutter_application_trial/src/repositories/repository.dart';
 import 'package:flutter_application_trial/src/repositories/mock_repository.dart';
 import 'package:flutter_application_trial/src/repositories/firestore_repository.dart';
@@ -83,6 +84,14 @@ final tripItineraryStreamProvider =
       return repo.watchItinerary(tripId);
     });
 
+/// Provider for itinerary categories (canonical list).
+final itineraryCategoriesProvider = FutureProvider<List<ItineraryCategory>>((
+  ref,
+) async {
+  final repo = ref.watch(repositoryProvider);
+  return repo.getItineraryCategories();
+});
+
 /// Provider for watching chat messages in real-time.
 final tripChatStreamProvider =
     StreamProvider.family<List<ChatMessage>, String>((ref, tripId) {
@@ -140,6 +149,40 @@ final userProfilesProvider = FutureProvider.family<
   return map;
 });
 
+/// Provider for searching user profiles.
+final friendSearchProvider = FutureProvider.family<List<UserProfile>, String>(
+  (ref, query) async {
+    final repo = ref.watch(repositoryProvider);
+    return repo.searchUserProfiles(query);
+  },
+);
+
+/// Provider for watching friends.
+final friendsProvider = StreamProvider<List<Friendship>>((ref) {
+  final repo = ref.watch(repositoryProvider);
+  return repo.watchFriends();
+});
+
+/// Provider for incoming friend requests.
+final incomingFriendRequestsProvider =
+    StreamProvider<List<FriendRequest>>((ref) {
+      final repo = ref.watch(repositoryProvider);
+      return repo.watchIncomingFriendRequests();
+    });
+
+/// Provider for outgoing friend requests.
+final outgoingFriendRequestsProvider =
+    StreamProvider<List<FriendRequest>>((ref) {
+      final repo = ref.watch(repositoryProvider);
+      return repo.watchOutgoingFriendRequests();
+    });
+
+/// Provider for blocked users.
+final blockedUsersProvider = StreamProvider<List<BlockedUser>>((ref) {
+  final repo = ref.watch(repositoryProvider);
+  return repo.watchBlockedUsers();
+});
+
 /// Provider for an itinerary item by ID (filtered from trip itinerary).
 final itineraryItemProvider =
     FutureProvider.family<ItineraryItem?, (String, String)>((
@@ -186,14 +229,14 @@ final createTripProvider = FutureProvider.family<Trip, CreateTripParams>((
 });
 
 /// Provider for invites.
-final createInviteProvider = FutureProvider.family<Invite, (String, String?)>((
-  ref,
-  params,
-) async {
-  final (tripId, email) = params;
-  final repo = ref.watch(repositoryProvider);
-  return repo.createInvite(tripId: tripId, invitedEmail: email);
-});
+final createInviteProvider =
+    FutureProvider.family<Invite, (String, String?, MemberRole)>(
+  (ref, params) async {
+    final (tripId, email, role) = params;
+    final repo = ref.watch(repositoryProvider);
+    return repo.createInvite(tripId: tripId, invitedEmail: email, role: role);
+  },
+);
 
 /// Parameters for creating a trip.
 class CreateTripParams {

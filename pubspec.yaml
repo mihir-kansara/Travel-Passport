@@ -51,6 +51,7 @@ dependencies:
   flutter_typeahead: ^5.2.0
   shared_preferences: ^2.2.3
   share_plus: ^10.0.0
+  qr_flutter: ^4.1.0
   image_picker: ^1.1.2
   url_launcher: ^6.3.0
 
