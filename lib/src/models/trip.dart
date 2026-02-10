@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 /// Represents a trip/passport with destination, dates, and shared planning data.
 class Trip {
   final String id;
@@ -17,8 +19,7 @@ class Trip {
   final TripStory story;
   final DateTime createdAt;
   final DateTime updatedAt;
-  final bool
-  isPublished; // Whether the trip has been published as a public story
+  final bool isPublished; // Whether the trip has been published as a public story
   final String? heroImageUrl; // Image for trip card/hero section
   final int? coverGradientId; // Gradient preset for cover when no image
 
@@ -148,12 +149,8 @@ class Trip {
       id: data['id'] as String? ?? '',
       ownerId: data['ownerId'] as String? ?? '',
       destination: data['destination'] as String? ?? '',
-      startDate: data['startDate'] != null
-          ? DateTime.parse(data['startDate'] as String)
-          : DateTime.now(),
-      endDate: data['endDate'] != null
-          ? DateTime.parse(data['endDate'] as String)
-          : DateTime.now(),
+      startDate: _parseTimestamp(data['startDate']),
+      endDate: _parseTimestamp(data['endDate']),
       description: data['description'] as String? ?? '',
       visibility: TripVisibility.values.firstWhere(
         (v) => v.name == (data['visibility'] as String?),
@@ -195,12 +192,8 @@ class Trip {
       story: data['story'] != null
           ? TripStory.fromJson(data['story'] as Map<String, dynamic>)
           : const TripStory(),
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
-      updatedAt: data['updatedAt'] != null
-          ? DateTime.parse(data['updatedAt'] as String)
-          : DateTime.now(),
+      createdAt: _parseTimestamp(data['createdAt']),
+      updatedAt: _parseTimestamp(data['updatedAt']),
       isPublished: data['isPublished'] as bool? ?? false,
       heroImageUrl: data['heroImageUrl'] as String?,
       coverGradientId: data['coverGradientId'] as int?,
@@ -440,9 +433,7 @@ class StoryMoment {
       id: data['id'] as String? ?? '',
       authorId: data['authorId'] as String? ?? '',
       caption: data['caption'] as String? ?? '',
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
+        createdAt: _parseTimestamp(data['createdAt']),
       type: StoryMomentType.values.firstWhere(
         (t) => t.name == (data['type'] as String?),
         orElse: () => StoryMomentType.text,
@@ -497,6 +488,7 @@ class WallComment {
       'authorId': authorId,
       'text': text,
       'createdAt': createdAt.toIso8601String(),
+      'createdAtClient': createdAt.toIso8601String(),
     };
   }
 
@@ -505,9 +497,39 @@ class WallComment {
       id: data['id'] as String? ?? '',
       authorId: data['authorId'] as String? ?? '',
       text: data['text'] as String? ?? '',
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
+      createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
+    );
+  }
+}
+
+class ItineraryComment {
+  final String id;
+  final String authorId;
+  final String text;
+  final DateTime createdAt;
+
+  const ItineraryComment({
+    required this.id,
+    required this.authorId,
+    required this.text,
+    required this.createdAt,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'authorId': authorId,
+      'text': text,
+      'createdAt': createdAt.toIso8601String(),
+    };
+  }
+
+  factory ItineraryComment.fromJson(Map<String, dynamic> data) {
+    return ItineraryComment(
+      id: data['id'] as String? ?? '',
+      authorId: data['authorId'] as String? ?? '',
+      text: data['text'] as String? ?? '',
+      createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
     );
   }
 }
@@ -546,9 +568,7 @@ class TripUpdate {
         (k) => k.name == (data['kind'] as String?),
         orElse: () => TripUpdateKind.system,
       ),
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
+      createdAt: _parseTimestamp(data['createdAt']),
     );
   }
 }
@@ -644,9 +664,7 @@ class MemberChecklist {
       hotelBooked: data['hotelBooked'] as bool? ?? false,
       reservationsBooked: data['reservationsBooked'] as bool? ?? false,
       passportReady: data['passportReady'] as bool? ?? false,
-      updatedAt: data['updatedAt'] != null
-          ? DateTime.parse(data['updatedAt'] as String)
-          : DateTime.now(),
+        updatedAt: _parseTimestamp(data['updatedAt']),
     );
   }
 }
@@ -691,12 +709,8 @@ class ChecklistItem {
       id: data['id'] as String? ?? '',
       title: data['title'] as String? ?? '',
       isDone: data['isDone'] as bool? ?? false,
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
-      updatedAt: data['updatedAt'] != null
-          ? DateTime.parse(data['updatedAt'] as String)
-          : DateTime.now(),
+        createdAt: _parseTimestamp(data['createdAt']),
+        updatedAt: _parseTimestamp(data['updatedAt']),
     );
   }
 }
@@ -745,9 +759,7 @@ class JoinRequest {
         (s) => s.name == (data['status'] as String?),
         orElse: () => JoinRequestStatus.pending,
       ),
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
+        createdAt: _parseTimestamp(data['createdAt']),
     );
   }
 }
@@ -779,9 +791,7 @@ class ChatMessage {
       id: data['id'] as String? ?? '',
       authorId: data['authorId'] as String? ?? '',
       text: data['text'] as String? ?? '',
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
+        createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
     );
   }
 }
@@ -877,6 +887,7 @@ class ItineraryItem {
       'id': id,
       'tripId': tripId,
       'dateTime': dateTime.toIso8601String(),
+      'dayKey': '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}',
       'title': title,
       'description': description,
       'notes': notes,
@@ -889,9 +900,11 @@ class ItineraryItem {
       'link': link,
       'isCompleted': isCompleted,
       'status': status.name,
+      'manualOrder': order,
       'order': order,
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
+      'createdAtClient': createdAt.toIso8601String(),
     };
   }
 
@@ -901,9 +914,7 @@ class ItineraryItem {
     return ItineraryItem(
       id: data['id'] as String? ?? '',
       tripId: data['tripId'] as String? ?? '',
-      dateTime: data['dateTime'] != null
-          ? DateTime.parse(data['dateTime'] as String)
-          : DateTime.now(),
+        dateTime: _parseTimestamp(data['dateTime']),
       title: data['title'] as String? ?? '',
       description: data['description'] as String?,
       notes: data['notes'] as String?,
@@ -922,13 +933,9 @@ class ItineraryItem {
         data['status'] as String?,
         data['isCompleted'] as bool? ?? false,
       ),
-      order: data['order'] as int? ?? 0,
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
-      updatedAt: data['updatedAt'] != null
-          ? DateTime.parse(data['updatedAt'] as String)
-          : DateTime.now(),
+        order: data['manualOrder'] as int? ?? data['order'] as int? ?? 0,
+        createdAt: _parseTimestamp(data['createdAt'] ?? data['createdAtClient']),
+        updatedAt: _parseTimestamp(data['updatedAt']),
     );
   }
 
@@ -996,9 +1003,7 @@ class Member {
         (r) => r.name == (data['role'] as String?),
         orElse: () => MemberRole.collaborator,
       ),
-      joinedAt: data['joinedAt'] != null
-          ? DateTime.parse(data['joinedAt'] as String)
-          : DateTime.now(),
+        joinedAt: _parseTimestamp(data['joinedAt']),
     );
   }
 
@@ -1076,18 +1081,27 @@ class Invite {
       token: data['token'] as String? ?? '',
       invitedEmail: data['invitedEmail'] as String?,
       createdBy: data['createdBy'] as String? ?? '',
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
-      expiresAt: data['expiresAt'] != null
-          ? DateTime.parse(data['expiresAt'] as String)
-          : DateTime.now(),
+        createdAt: _parseTimestamp(data['createdAt']),
+        expiresAt: _parseTimestamp(data['expiresAt']),
       isUsed: data['isUsed'] as bool? ?? false,
     );
   }
 
   @override
   String toString() => 'Invite(id: $id, tripId: $tripId, valid: $isValid)';
+}
+
+DateTime _parseTimestamp(dynamic value) {
+  if (value is Timestamp) {
+    return value.toDate();
+  }
+  if (value is DateTime) {
+    return value;
+  }
+  if (value is String && value.isNotEmpty) {
+    return DateTime.tryParse(value) ?? DateTime.now();
+  }
+  return DateTime.now();
 }
 
 /// Enum for trip visibility (privacy).

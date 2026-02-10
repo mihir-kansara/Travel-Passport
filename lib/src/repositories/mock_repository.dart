@@ -8,6 +8,8 @@ class MockTripRepository implements TripRepository {
   final String _currentUserId;
   late List<Trip> _trips;
   final List<Invite> _invites = [];
+  final Map<String, List<WallComment>> _tripComments = {};
+  final Map<String, Map<String, List<ItineraryComment>>> _itemComments = {};
 
   MockTripRepository({String currentUserId = 'user_1'})
     : _currentUserId = currentUserId {
@@ -254,6 +256,10 @@ class MockTripRepository implements TripRepository {
             'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=900',
       ),
     ];
+
+    for (final trip in _trips) {
+      _tripComments[trip.id] = [...trip.story.wallComments];
+    }
   }
 
   @override
@@ -396,7 +402,9 @@ class MockTripRepository implements TripRepository {
       (t) => t.id == tripId,
       orElse: () => throw Exception('Trip not found'),
     );
-    final updatedComments = [...trip.story.wallComments, comment];
+    final existing = _tripComments[tripId] ?? [];
+    final updatedComments = [...existing, comment];
+    _tripComments[tripId] = updatedComments;
     final stats = trip.story.wallStats.copyWith(
       comments: trip.story.wallStats.comments + 1,
     );
@@ -460,7 +468,7 @@ class MockTripRepository implements TripRepository {
           ...updatedMembers,
           Member(
             userId: req.userId,
-            name: 'Guest Traveler',
+            name: 'Traveler',
             role: MemberRole.viewer,
             joinedAt: DateTime.now(),
           ),
@@ -815,13 +823,104 @@ class MockTripRepository implements TripRepository {
   }
 
   @override
+  Stream<List<WallComment>> watchTripComments(String tripId, {int limit = 100}) {
+    List<WallComment> getComments() {
+      return (_tripComments[tripId] ?? []).take(limit).toList();
+    }
+
+    return ConcatStream([
+      Stream.value(getComments()),
+      Stream.periodic(const Duration(seconds: 5), (_) => getComments()),
+    ]);
+  }
+
+  @override
+  Stream<List<ChatMessage>> watchChatMessages(
+    String tripId, {
+    int limit = 50,
+  }) {
+    List<ChatMessage> getMessages() {
+      try {
+        final trip = _trips.firstWhere((t) => t.id == tripId);
+        final sorted = [...trip.chat]
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        if (sorted.length <= limit) return sorted;
+        return sorted.sublist(sorted.length - limit);
+      } catch (_) {
+        return [];
+      }
+    }
+
+    return ConcatStream([
+      Stream.value(getMessages()),
+      Stream.periodic(const Duration(seconds: 5), (_) => getMessages()),
+    ]);
+  }
+
+  @override
+  Future<List<ChatMessage>> fetchChatMessagesPage(
+    String tripId, {
+    int limit = 50,
+    ChatMessagesCursor? before,
+  }) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    final trip = _trips.firstWhere(
+      (t) => t.id == tripId,
+      orElse: () => throw Exception('Trip not found'),
+    );
+    final sorted = [...trip.chat]
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    if (before == null) {
+      if (sorted.length <= limit) return sorted;
+      return sorted.sublist(sorted.length - limit);
+    }
+    final older = sorted.where((message) {
+      if (message.createdAt.isBefore(before.createdAt)) return true;
+      if (message.createdAt.isAtSameMomentAs(before.createdAt) &&
+          message.id != before.messageId) {
+        return true;
+      }
+      return false;
+    }).toList();
+    if (older.length <= limit) return older;
+    return older.sublist(older.length - limit);
+  }
+
+  @override
+  Stream<List<ItineraryComment>> watchItineraryComments(
+    String tripId,
+    String itemId,
+  ) {
+    List<ItineraryComment> getComments() {
+      return (_itemComments[tripId]?[itemId] ?? []).toList();
+    }
+
+    return ConcatStream([
+      Stream.value(getComments()),
+      Stream.periodic(const Duration(seconds: 5), (_) => getComments()),
+    ]);
+  }
+
+  @override
+  Future<void> addItineraryComment(
+    String tripId,
+    String itemId,
+    ItineraryComment comment,
+  ) async {
+    await Future.delayed(const Duration(milliseconds: 150));
+    final tripMap = _itemComments.putIfAbsent(tripId, () => {});
+    final existing = tripMap[itemId] ?? [];
+    tripMap[itemId] = [...existing, comment];
+  }
+
+  @override
   Future<UserProfile?> getUserProfile(String userId) async {
     await Future.delayed(const Duration(milliseconds: 200));
     return UserProfile(
       userId: userId,
       displayName: userId == _currentUserId ? 'You' : 'Jane Smith',
       email: userId == _currentUserId ? 'you@example.com' : 'jane@example.com',
-      avatarUrl: null,
+      photoUrl: null,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );

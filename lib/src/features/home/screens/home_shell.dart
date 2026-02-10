@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_application_trial/src/screens/feed_screen.dart';
-import 'package:flutter_application_trial/src/screens/profile_screen.dart';
+import 'package:flutter_application_trial/src/features/feed/screens/feed_screen.dart';
+import 'package:flutter_application_trial/src/features/profile/screens/profile_screen.dart';
+import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -14,15 +15,10 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: const [
-          FeedScreen(initialTab: HomeTab.wall),
-          FeedScreen(initialTab: HomeTab.trips),
-          ProfileScreen(),
-        ],
-      ),
+    return AppScaffold(
+      showBack: false,
+      showAppBar: false,
+      padding: EdgeInsets.zero,
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (index) => setState(() => _currentIndex = index),
@@ -39,6 +35,14 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.person_outline),
             label: 'Profile',
           ),
+        ],
+      ),
+      body: IndexedStack(
+        index: _currentIndex,
+        children: const [
+          FeedScreen(initialTab: HomeTab.wall),
+          FeedScreen(initialTab: HomeTab.trips),
+          ProfileScreen(),
         ],
       ),
     );

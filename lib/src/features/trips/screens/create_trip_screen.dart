@@ -9,10 +9,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
-import 'package:flutter_application_trial/src/screens/trip_detail_screen.dart';
+import 'package:flutter_application_trial/src/features/trips/screens/trip_detail_screen.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
 import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
-import 'package:flutter_application_trial/src/widgets/buttons.dart';
+import 'package:flutter_application_trial/src/widgets/primary_button.dart';
+import 'package:flutter_application_trial/src/widgets/secondary_button.dart';
 import 'package:flutter_application_trial/src/widgets/section_header.dart';
 
 class CreateTripScreen extends ConsumerStatefulWidget {

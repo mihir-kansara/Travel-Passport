@@ -4,16 +4,18 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_application_trial/src/app_config.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
-import 'package:flutter_application_trial/src/screens/create_trip_screen.dart';
-import 'package:flutter_application_trial/src/screens/invite_join_screen.dart';
-import 'package:flutter_application_trial/src/screens/story_detail_screen.dart';
-import 'package:flutter_application_trial/src/screens/trip_detail_screen.dart';
-import 'package:flutter_application_trial/ui/app_colors.dart';
-import 'package:flutter_application_trial/ui/app_radii.dart';
-import 'package:flutter_application_trial/ui/app_spacing.dart';
-import 'package:flutter_application_trial/widgets/empty_state.dart';
-import 'package:flutter_application_trial/widgets/loading_placeholder.dart';
-import 'package:flutter_application_trial/widgets/trip_card.dart';
+import 'package:flutter_application_trial/src/features/invites/screens/invite_join_screen.dart';
+import 'package:flutter_application_trial/src/features/story/screens/story_detail_screen.dart';
+import 'package:flutter_application_trial/src/features/trips/screens/create_trip_screen.dart';
+import 'package:flutter_application_trial/src/features/trips/screens/trip_detail_screen.dart';
+import 'package:flutter_application_trial/src/app_theme.dart';
+import 'package:flutter_application_trial/src/utils/async_guard.dart';
+import 'package:flutter_application_trial/src/utils/invite_utils.dart';
+import 'package:flutter_application_trial/src/widgets/empty_state_card.dart';
+import 'package:flutter_application_trial/src/widgets/loading_placeholder.dart';
+import 'package:flutter_application_trial/src/widgets/primary_button.dart';
+import 'package:flutter_application_trial/src/widgets/secondary_button.dart';
+import 'package:flutter_application_trial/src/widgets/trip_card.dart';
 
 enum HomeTab { wall, trips }
 
@@ -44,29 +46,17 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   Widget build(BuildContext context) {
     final tripsAsync = ref.watch(userTripsProvider);
 
-    return Scaffold(
-      floatingActionButton: _activeTab == HomeTab.trips
-          ? FloatingActionButton.extended(
-              onPressed: _openCreateTrip,
-              icon: const Icon(Icons.add),
-              label: const Text('Create trip'),
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      body: SafeArea(
-        child: tripsAsync.when(
-          data: (trips) => _buildContent(context, trips),
-          loading: () => const LoadingPlaceholder(itemCount: 5, itemHeight: 180),
-          error: (e, st) => Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.error_outline, size: 48, color: Colors.red[400]),
-                const SizedBox(height: AppSpacing.lg),
-                Text('Error loading trips: $e'),
-              ],
-            ),
-          ),
+    return tripsAsync.when(
+      data: (trips) => _buildContent(context, trips),
+      loading: () => const LoadingPlaceholder(itemCount: 5, itemHeight: 180),
+      error: (e, st) => Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.error_outline, size: 48, color: Colors.red[400]),
+            const SizedBox(height: AppSpacing.lg),
+            Text('Error loading trips: $e'),
+          ],
         ),
       ),
     );
@@ -184,7 +174,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         title: const Text('Join a trip'),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(hintText: 'Paste invite token'),
+          decoration: const InputDecoration(
+            hintText: 'Paste invite token or link',
+          ),
         ),
         actions: [
           TextButton(
@@ -204,9 +196,16 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     );
 
     if (!mounted || token == null || token.isEmpty) return;
+    final parsedToken = parseInviteTokenFromText(token);
+    if (parsedToken == null) {
+      showGuardedSnackBar(context, 'Paste a valid invite token or link.');
+      return;
+    }
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => InviteJoinScreen(token: token)),
+      MaterialPageRoute(
+        builder: (_) => InviteJoinScreen(inviteInput: parsedToken),
+      ),
     );
   }
 }
@@ -252,73 +251,24 @@ class _HomeHeader extends StatelessWidget {
           const SizedBox(width: AppSpacing.md),
           Row(
             children: [
-              _HeaderIconButton(
-                icon: Icons.link,
-                label: 'Join a trip',
-                background: AppColors.surface,
-                border: AppColors.border,
-                foreground: AppColors.text,
-                onTap: onJoin,
+              Expanded(
+                child: SecondaryButton(
+                  label: 'Join a trip',
+                  icon: Icons.link,
+                  onPressed: onJoin,
+                ),
               ),
               const SizedBox(width: AppSpacing.md),
-              _HeaderIconButton(
-                icon: Icons.add,
-                label: 'Create a trip',
-                background: AppColors.primary,
-                border: AppColors.primary,
-                foreground: Colors.white,
-                onTap: onCreate,
-                shadow: const BoxShadow(
-                  color: Color(0x334F46E5),
-                  blurRadius: 12,
-                  offset: Offset(0, 6),
+              Expanded(
+                child: PrimaryButton(
+                  label: 'Create a trip',
+                  icon: Icons.add,
+                  onPressed: onCreate,
                 ),
               ),
             ],
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _HeaderIconButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color background;
-  final Color border;
-  final Color foreground;
-  final VoidCallback onTap;
-  final BoxShadow? shadow;
-
-  const _HeaderIconButton({
-    required this.icon,
-    required this.label,
-    required this.background,
-    required this.border,
-    required this.foreground,
-    required this.onTap,
-    this.shadow,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: label,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadii.md),
-        child: Container(
-          height: 48,
-          width: 48,
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(AppRadii.md),
-            border: Border.all(color: border),
-            boxShadow: shadow != null ? [shadow!] : null,
-          ),
-          child: Icon(icon, color: foreground, semanticLabel: label),
-        ),
       ),
     );
   }
@@ -611,7 +561,7 @@ class _WallFeed extends StatelessWidget {
     if (trips.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-        child: EmptyState(
+        child: EmptyStateCard(
           title: 'No stories yet',
           subtitle: 'Publish a trip story to make your wall come alive.',
           icon: Icons.wallpaper,
@@ -676,13 +626,13 @@ class _TripsFeed extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
       child: isEmpty
-          ? EmptyState(
-            title: 'Create your first trip',
-            subtitle: 'Plan something new and invite your travel crew.',
-            icon: Icons.flight_takeoff,
-            actionLabel: 'Start a trip',
-            onAction: onCreateTrip,
-          )
+          ? EmptyStateCard(
+              title: 'Create your first trip',
+              subtitle: 'Plan something new and invite your travel crew.',
+              icon: Icons.flight_takeoff,
+              actionLabel: 'Start a trip',
+              onAction: onCreateTrip,
+            )
           : Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -725,7 +675,7 @@ class _TripsFeed extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.md),
               if (upcoming.isEmpty)
-                EmptyState(
+                EmptyStateCard(
                   title: 'No upcoming trips',
                   subtitle: 'Start a trip and invite your crew to plan together.',
                   icon: Icons.flight_takeoff,
@@ -761,7 +711,7 @@ class _TripsFeed extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.md),
               if (past.isEmpty)
-                EmptyState(
+                EmptyStateCard(
                   title: 'No past trips yet',
                   subtitle: 'Your travel memories will collect here over time.',
                   icon: Icons.archive_outlined,

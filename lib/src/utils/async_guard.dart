@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_application_trial/src/providers.dart';
+import 'package:flutter_application_trial/src/utils/invite_utils.dart';
 
 void showGuardedSnackBar(BuildContext context, String message) {
   if (!context.mounted) return;
@@ -74,7 +75,9 @@ Future<bool> ensureSignedIn(
   if (session != null) return true;
   if (pendingInviteToken != null) {
     ref.read(pendingInviteTokenProvider.notifier).state = pendingInviteToken;
+    await InviteTokenStore.savePendingToken(pendingInviteToken);
   }
+  if (!context.mounted) return false;
   final result = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
@@ -92,7 +95,8 @@ Future<bool> ensureSignedIn(
       ],
     ),
   );
-  if (result == true && context.mounted) {
+  if (!context.mounted) return false;
+  if (result == true) {
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
   return false;

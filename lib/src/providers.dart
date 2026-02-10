@@ -83,6 +83,63 @@ final tripItineraryStreamProvider =
       return repo.watchItinerary(tripId);
     });
 
+/// Provider for watching chat messages in real-time.
+final tripChatStreamProvider =
+    StreamProvider.family<List<ChatMessage>, String>((ref, tripId) {
+      final repo = ref.watch(repositoryProvider);
+      return repo.watchChatMessages(tripId);
+    });
+
+/// Provider for watching trip wall comments in real-time.
+final tripCommentsStreamProvider =
+    StreamProvider.family<List<WallComment>, String>((ref, tripId) {
+      final repo = ref.watch(repositoryProvider);
+      return repo.watchTripComments(tripId);
+    });
+
+/// Provider for watching itinerary item comments in real-time.
+final itineraryCommentsStreamProvider =
+    StreamProvider.family<List<ItineraryComment>, (String, String)>(
+      (ref, params) {
+        final (tripId, itemId) = params;
+        final repo = ref.watch(repositoryProvider);
+        return repo.watchItineraryComments(tripId, itemId);
+      },
+    );
+
+/// Provider for a single user profile.
+final userProfileProvider = FutureProvider.family<UserProfile?, String>(
+  (ref, userId) async {
+    final repo = ref.watch(repositoryProvider);
+    return repo.getUserProfile(userId);
+  },
+);
+
+/// Provider for current user's profile.
+final currentUserProfileProvider = FutureProvider<UserProfile?>((ref) async {
+  final session = ref.watch(authSessionProvider).value;
+  if (session == null) return null;
+  final repo = ref.watch(repositoryProvider);
+  return repo.getUserProfile(session.userId);
+});
+
+/// Provider for a map of user profiles keyed by userId.
+final userProfilesProvider = FutureProvider.family<
+    Map<String, UserProfile?>,
+    List<String>>((ref, userIds) async {
+  if (userIds.isEmpty) return {};
+  final repo = ref.watch(repositoryProvider);
+  final uniqueIds = userIds.toSet().toList();
+  final profiles = await Future.wait(
+    uniqueIds.map((userId) => repo.getUserProfile(userId)),
+  );
+  final map = <String, UserProfile?>{};
+  for (var i = 0; i < uniqueIds.length; i++) {
+    map[uniqueIds[i]] = profiles[i];
+  }
+  return map;
+});
+
 /// Provider for an itinerary item by ID (filtered from trip itinerary).
 final itineraryItemProvider =
     FutureProvider.family<ItineraryItem?, (String, String)>((

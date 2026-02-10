@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 
 /// Abstract repository for Trip data operations.
@@ -70,8 +71,34 @@ abstract class TripRepository {
   /// Add a comment to the trip wall.
   Future<void> addWallComment(String tripId, WallComment comment);
 
+  /// Stream trip wall comments.
+  Stream<List<WallComment>> watchTripComments(String tripId, {int limit});
+
   /// Send a chat message within a trip.
   Future<void> sendChatMessage(String tripId, ChatMessage message);
+
+  /// Stream chat messages in descending order (latest last in returned list).
+  Stream<List<ChatMessage>> watchChatMessages(String tripId, {int limit});
+
+  /// Fetch older chat messages before the provided cursor.
+  Future<List<ChatMessage>> fetchChatMessagesPage(
+    String tripId, {
+    int limit,
+    ChatMessagesCursor? before,
+  });
+
+  /// Stream comments for a specific itinerary item.
+  Stream<List<ItineraryComment>> watchItineraryComments(
+    String tripId,
+    String itemId,
+  );
+
+  /// Add a comment for a specific itinerary item.
+  Future<void> addItineraryComment(
+    String tripId,
+    String itemId,
+    ItineraryComment comment,
+  );
 
   /// Update a member checklist entry.
   Future<void> updateMemberChecklist(String tripId, MemberChecklist checklist);
@@ -108,12 +135,22 @@ abstract class TripRepository {
   Future<void> updateUserProfile(UserProfile profile);
 }
 
+class ChatMessagesCursor {
+  final DateTime createdAt;
+  final String messageId;
+
+  const ChatMessagesCursor({
+    required this.createdAt,
+    required this.messageId,
+  });
+}
+
 /// User profile information.
 class UserProfile {
   final String userId;
   final String displayName;
   final String? email;
-  final String? avatarUrl;
+  final String? photoUrl;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -121,7 +158,7 @@ class UserProfile {
     required this.userId,
     required this.displayName,
     this.email,
-    this.avatarUrl,
+    this.photoUrl,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -131,7 +168,7 @@ class UserProfile {
     String? userId,
     String? displayName,
     String? email,
-    String? avatarUrl,
+    String? photoUrl,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -139,7 +176,7 @@ class UserProfile {
       userId: userId ?? this.userId,
       displayName: displayName ?? this.displayName,
       email: email ?? this.email,
-      avatarUrl: avatarUrl ?? this.avatarUrl,
+      photoUrl: photoUrl ?? this.photoUrl,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -151,25 +188,34 @@ class UserProfile {
       'userId': userId,
       'displayName': displayName,
       'email': email,
-      'avatarUrl': avatarUrl,
-      'createdAt': DateTime.now(),
-      'updatedAt': DateTime.now(),
+      'photoUrl': photoUrl,
+      'createdAt': createdAt.toIso8601String(),
+      'updatedAt': updatedAt.toIso8601String(),
     };
   }
 
   /// Create from Firestore document map.
   factory UserProfile.fromFirestore(Map<String, dynamic> data) {
+    DateTime parseTimestamp(dynamic value) {
+      if (value is Timestamp) {
+        return value.toDate();
+      }
+      if (value is DateTime) {
+        return value;
+      }
+      if (value is String && value.isNotEmpty) {
+        return DateTime.tryParse(value) ?? DateTime.now();
+      }
+      return DateTime.now();
+    }
+
     return UserProfile(
       userId: data['userId'] as String? ?? '',
       displayName: data['displayName'] as String? ?? '',
       email: data['email'] as String?,
-      avatarUrl: data['avatarUrl'] as String?,
-      createdAt: data['createdAt'] != null
-          ? DateTime.parse(data['createdAt'] as String)
-          : DateTime.now(),
-      updatedAt: data['updatedAt'] != null
-          ? DateTime.parse(data['updatedAt'] as String)
-          : DateTime.now(),
+      photoUrl: (data['photoUrl'] ?? data['avatarUrl']) as String?,
+      createdAt: parseTimestamp(data['createdAt']),
+      updatedAt: parseTimestamp(data['updatedAt']),
     );
   }
 }

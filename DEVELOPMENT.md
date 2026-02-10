@@ -147,6 +147,13 @@
 
 ## 🛠️ Tooling Notes (Windows)
 
+## 🧭 DEV Note: App Structure
+
+The canonical Flutter app lives at the repo root. Any legacy app is quarantined
+under archived/. New work should go in lib/src/features/<feature>/ (screens,
+models, services), shared UI in lib/src/widgets/, and design tokens + theme in
+lib/src/app_theme.dart.
+
 If `flutter analyze` reports `always_use_package_imports` on files that already use
 `package:` imports, the analyzer cache can be stale. Run the following sequence
 from the repo root to clear it reliably:

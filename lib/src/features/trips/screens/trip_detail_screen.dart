@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,11 +8,15 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_application_trial/src/app_config.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
+import 'package:flutter_application_trial/src/repositories/repository.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
-import 'package:flutter_application_trial/src/screens/trip_settings_screen.dart';
+import 'package:flutter_application_trial/src/features/trips/screens/trip_settings_screen.dart';
+import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
+import 'package:flutter_application_trial/src/widgets/info_chip.dart';
 
 enum TripDetailTab { planner, checklist, story, people, chat }
 
@@ -40,6 +45,9 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
   final Set<String> _busyActions = {};
   final Map<String, bool> _likeOverrides = {};
   final List<_PendingChatEntry> _pendingChats = [];
+  final List<ChatMessage> _olderChatMessages = [];
+  bool _isLoadingOlderChats = false;
+  bool _hasMoreChats = true;
 
   @override
   void dispose() {
@@ -52,131 +60,194 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
   Widget build(BuildContext context) {
     final tripAsync = ref.watch(tripByIdProvider(widget.tripId));
     final itineraryAsync = ref.watch(tripItineraryProvider(widget.tripId));
+    final commentsAsync = ref.watch(tripCommentsStreamProvider(widget.tripId));
+    final chatAsync = ref.watch(tripChatStreamProvider(widget.tripId));
     final currentUserId = ref.watch(authSessionProvider).value?.userId ?? '';
 
-    return Scaffold(
-      appBar: AppBar(
-        leading: Navigator.of(context).canPop() ? const BackButton() : null,
-        actions: [
-          IconButton(
-            tooltip: 'Go home',
-            icon: const Icon(Icons.home_outlined),
-            onPressed: () =>
-                Navigator.of(context).popUntil((route) => route.isFirst),
-          ),
-          IconButton(
-            tooltip: 'Trip settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => _openSettings(),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: tripAsync.when(
-          data: (trip) {
-            if (trip == null) {
-              return const Center(child: Text('Trip not found'));
-            }
-            return DefaultTabController(
-              length: 5,
-              initialIndex: widget.initialTab.index,
-              child: Column(
-                children: [
-                  _TripHeader(trip: trip),
-                  _TripTabs(),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        itineraryAsync.when(
-                          data: (items) => _PlannerTab(
-                            trip: trip,
-                            items: items,
-                            selectedDayIndex: _selectedDayIndex,
-                            onSelectDay: (index) =>
-                                setState(() => _selectedDayIndex = index),
-                            onAddItem: (type) =>
-                                _openPlannerSheet(trip, items, type: type),
-                            onEditItem: (item) =>
-                                _openPlannerSheet(trip, items, item: item),
-                            onEditNotes: (item) =>
-                                _openNotesEditor(trip, item),
-                            onDeleteItem: (item) =>
-                                _handleDeleteItem(trip, item),
-                            onToggleStatus: (item) =>
-                                _handleToggleStatus(trip, item),
-                            onReorderDay: (items) =>
-                                _handleReorderDay(trip, items),
-                          ),
-                          loading: () => const _PlannerLoading(),
-                          error: (e, st) => _AsyncErrorState(
-                            message: 'Unable to load the itinerary.',
-                            onRetry: () => ref.refresh(
-                              tripItineraryProvider(widget.tripId),
-                            ),
-                          ),
-                        ),
-                        _ChecklistTab(
+    return AppScaffold(
+      title: 'Trip details',
+      onHome: () => Navigator.of(context).popUntil((route) => route.isFirst),
+      actions: [
+        IconButton(
+          tooltip: 'Trip settings',
+          icon: const Icon(Icons.settings_outlined),
+          onPressed: () => _openSettings(),
+        ),
+      ],
+      padding: EdgeInsets.zero,
+      body: tripAsync.when(
+        data: (trip) {
+          if (trip == null) {
+            return const Center(child: Text('Trip not found'));
+          }
+          final profileIds = <String>{
+            ...trip.members.map((m) => m.userId),
+            ...trip.joinRequests.map((r) => r.userId),
+          };
+          final profilesAsync = ref.watch(
+            userProfilesProvider(profileIds.toList(growable: false)),
+          );
+          final profiles = profilesAsync.value ?? <String, UserProfile?>{};
+          return DefaultTabController(
+            length: 5,
+            initialIndex: widget.initialTab.index,
+            child: Column(
+              children: [
+                _TripHeader(trip: trip),
+                _TripTabs(),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      itineraryAsync.when(
+                        data: (items) => _PlannerTab(
                           trip: trip,
-                          currentUserId: currentUserId,
-                          onUpdateMember: _updateMemberChecklist,
-                          onUpsertShared: _upsertSharedChecklistItem,
-                          onDeleteShared: _deleteSharedChecklistItem,
-                        ),
-                        _StoryTab(
-                          trip: trip,
-                          commentController: _commentController,
-                          onSendComment: () => _handleSendComment(trip),
-                          onTogglePublish: (value) =>
-                              _handlePublishToggle(trip, value),
-                          onToggleMoment: (moment) =>
-                              _handleToggleMoment(trip, moment),
-                          isSendingComment: _isBusy('comment-${trip.id}'),
-                          isPublishing: _isBusy('publish-${trip.id}'),
-                          likeCount: _likeCountForTrip(trip, currentUserId),
-                        ),
-                        _PeopleTab(
-                          trip: trip,
-                          onRequestJoin: () => _handleJoinRequest(trip),
-                          onRespondJoin: (requestId, status) =>
-                              _handleJoinRespond(trip, requestId, status),
-                          currentUserId: currentUserId,
-                          onInvite: () => _openInviteSheet(trip),
-                          isJoinRequestBusy:
-                              _isBusy('join-request-${trip.id}'),
-                          isResponding: (requestId) =>
-                              _isBusy('join-respond-$requestId'),
-                        ),
-                        _ChatTab(
-                          trip: trip,
-                          chatController: _chatController,
-                          onSend: () => _handleSendChat(trip),
-                          currentUserId: currentUserId,
-                          isSending: _isBusy('chat-${trip.id}'),
-                          pendingMessages: _pendingChats,
-                          onRetry: (entry) => _sendChatMessage(
+                          items: items,
+                          selectedDayIndex: _selectedDayIndex,
+                          onSelectDay: (index) =>
+                              setState(() => _selectedDayIndex = index),
+                          onAddItem: (type) =>
+                              _openPlannerSheet(trip, items, type: type),
+                          onEditItem: (item) =>
+                              _openPlannerSheet(trip, items, item: item),
+                          onEditNotes: (item) => _openNotesEditor(trip, item),
+                          onDeleteItem: (item) =>
+                              _handleDeleteItem(trip, item),
+                          onToggleStatus: (item) =>
+                              _handleToggleStatus(trip, item),
+                            onOpenComments: (item) => _openItineraryComments(
                             trip,
-                            text: entry.message.text,
-                            pending: entry,
+                            item,
+                            profiles,
+                            ),
+                          onReorderDay: (items) =>
+                              _handleReorderDay(trip, items),
+                        ),
+                        loading: () => const _PlannerLoading(),
+                        error: (e, st) => _AsyncErrorState(
+                          message: 'Unable to load the itinerary.',
+                          onRetry: () => ref.refresh(
+                            tripItineraryProvider(widget.tripId),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                      _ChecklistTab(
+                        trip: trip,
+                        profiles: profiles,
+                        currentUserId: currentUserId,
+                        onUpdateMember: _updateMemberChecklist,
+                        onUpsertShared: _upsertSharedChecklistItem,
+                        onDeleteShared: _deleteSharedChecklistItem,
+                      ),
+                      _StoryTab(
+                        trip: trip,
+                        profiles: profiles,
+                        comments: commentsAsync.value ?? const [],
+                        commentController: _commentController,
+                        onSendComment: () => _handleSendComment(trip),
+                        onTogglePublish: (value) =>
+                            _handlePublishToggle(trip, value),
+                        onToggleMoment: (moment) =>
+                            _handleToggleMoment(trip, moment),
+                        isSendingComment: _isBusy('comment-${trip.id}'),
+                        isPublishing: _isBusy('publish-${trip.id}'),
+                        likeCount: _likeCountForTrip(trip, currentUserId),
+                      ),
+                      _PeopleTab(
+                        trip: trip,
+                        profiles: profiles,
+                        onRequestJoin: () => _handleJoinRequest(trip),
+                        onRespondJoin: (requestId, status) =>
+                            _handleJoinRespond(trip, requestId, status),
+                        currentUserId: currentUserId,
+                        onInvite: () => _openInviteSheet(trip),
+                        isJoinRequestBusy: _isBusy('join-request-${trip.id}'),
+                        isResponding: (requestId) =>
+                            _isBusy('join-respond-$requestId'),
+                      ),
+                      _ChatTab(
+                        trip: trip,
+                        profiles: profiles,
+                        messages: _mergeChatMessages(
+                          chatAsync.value ?? const [],
+                        ),
+                        chatController: _chatController,
+                        onSend: () => _handleSendChat(trip),
+                        currentUserId: currentUserId,
+                        isSending: _isBusy('chat-${trip.id}'),
+                        pendingMessages: _pendingChats,
+                        canLoadMore: _hasMoreChats,
+                        isLoadingMore: _isLoadingOlderChats,
+                        onLoadMore: () => _loadOlderChats(
+                          trip.id,
+                          _mergeChatMessages(
+                            chatAsync.value ?? const [],
+                          ),
+                        ),
+                        onRetry: (entry) => _sendChatMessage(
+                          trip,
+                          text: entry.message.text,
+                          pending: entry,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            );
-          },
-          loading: () => const _TripDetailLoading(),
-          error: (e, st) => _AsyncErrorState(
-            message: 'Unable to load this trip.',
-            onRetry: () => ref.refresh(tripByIdProvider(widget.tripId)),
-          ),
+                ),
+              ],
+            ),
+          );
+        },
+        loading: () => const _TripDetailLoading(),
+        error: (e, st) => _AsyncErrorState(
+          message: 'Unable to load this trip.',
+          onRetry: () => ref.refresh(tripByIdProvider(widget.tripId)),
         ),
       ),
     );
   }
 
   bool _isBusy(String key) => _busyActions.contains(key);
+
+  List<ChatMessage> _mergeChatMessages(List<ChatMessage> latest) {
+    final merged = <String, ChatMessage>{
+      for (final message in _olderChatMessages) message.id: message,
+      for (final message in latest) message.id: message,
+    };
+    final list = merged.values.toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return list;
+  }
+
+  Future<void> _loadOlderChats(
+    String tripId,
+    List<ChatMessage> current,
+  ) async {
+    if (_isLoadingOlderChats || !_hasMoreChats) return;
+    if (current.isEmpty) return;
+    setState(() => _isLoadingOlderChats = true);
+    final earliest = current.first;
+    final repo = ref.read(repositoryProvider);
+    final page = await repo.fetchChatMessagesPage(
+      tripId,
+      limit: 50,
+      before: ChatMessagesCursor(
+        createdAt: earliest.createdAt,
+        messageId: earliest.id,
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      if (page.isEmpty) {
+        _hasMoreChats = false;
+      } else {
+        for (final message in page) {
+          if (_olderChatMessages.every((m) => m.id != message.id)) {
+            _olderChatMessages.add(message);
+          }
+        }
+      }
+      _isLoadingOlderChats = false;
+    });
+  }
 
   int _likeCountForTrip(Trip trip, String userId) {
     final baseLiked = trip.story.likedBy.contains(userId);
@@ -871,6 +942,32 @@ class _TripDetailScreenState extends ConsumerState<TripDetailScreen> {
     );
   }
 
+  Future<void> _openItineraryComments(
+    Trip trip,
+    ItineraryItem item,
+    Map<String, UserProfile?> profiles,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 16, 20, bottomInset + 16),
+          child: _ItineraryCommentsSheet(
+            tripId: trip.id,
+            item: item,
+            members: trip.members,
+            profiles: profiles,
+          ),
+        );
+      },
+    );
+  }
+
   String _buildInviteLink(String token) {
     // TODO: Replace with Firebase Dynamic Links or short links when ready.
     return AppConfig.inviteLink(token);
@@ -1075,15 +1172,15 @@ class _TripHeader extends StatelessWidget {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _Chip(
+                    InfoChip(
                       icon: Icons.people_alt_outlined,
                       label: '${trip.members.length} members',
                     ),
-                    _Chip(
+                    InfoChip(
                       icon: Icons.shield_outlined,
                       label: _visibilityLabel(trip.audience.visibility),
                     ),
-                    _Chip(
+                    InfoChip(
                       icon: Icons.public,
                       label: trip.story.publishToWall ? 'On Wall' : 'Off Wall',
                       tone: trip.story.publishToWall
@@ -1143,6 +1240,7 @@ class _PlannerTab extends StatelessWidget {
   final ValueChanged<ItineraryItem> onEditNotes;
   final ValueChanged<ItineraryItem> onDeleteItem;
   final ValueChanged<ItineraryItem> onToggleStatus;
+  final ValueChanged<ItineraryItem> onOpenComments;
   final ValueChanged<List<ItineraryItem>> onReorderDay;
 
   const _PlannerTab({
@@ -1155,6 +1253,7 @@ class _PlannerTab extends StatelessWidget {
     required this.onEditNotes,
     required this.onDeleteItem,
     required this.onToggleStatus,
+    required this.onOpenComments,
     required this.onReorderDay,
   });
 
@@ -1270,6 +1369,7 @@ class _PlannerTab extends StatelessWidget {
                   onEditNotes: onEditNotes,
                   onDeleteItem: onDeleteItem,
                   onToggleStatus: onToggleStatus,
+                  onOpenComments: onOpenComments,
                   onReorderDay: onReorderDay,
                 ),
               ),
@@ -1379,6 +1479,7 @@ class _PlannerItineraryList extends StatelessWidget {
   final ValueChanged<ItineraryItem> onEditNotes;
   final ValueChanged<ItineraryItem> onDeleteItem;
   final ValueChanged<ItineraryItem> onToggleStatus;
+  final ValueChanged<ItineraryItem> onOpenComments;
   final ValueChanged<List<ItineraryItem>> onReorderDay;
 
   const _PlannerItineraryList({
@@ -1388,6 +1489,7 @@ class _PlannerItineraryList extends StatelessWidget {
     required this.onEditNotes,
     required this.onDeleteItem,
     required this.onToggleStatus,
+    required this.onOpenComments,
     required this.onReorderDay,
   });
 
@@ -1437,6 +1539,7 @@ class _PlannerItineraryList extends StatelessWidget {
           onDelete: () => onDeleteItem(item),
           onToggleStatus: () => onToggleStatus(item),
           onEditNotes: () => onEditNotes(item),
+          onOpenComments: () => onOpenComments(item),
         );
       },
     );
@@ -1476,6 +1579,7 @@ class _PlannerItemCard extends StatefulWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onEditNotes;
+  final VoidCallback onOpenComments;
   final Widget? dragHandle;
 
   const _PlannerItemCard({
@@ -1486,6 +1590,7 @@ class _PlannerItemCard extends StatefulWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onEditNotes,
+    required this.onOpenComments,
     this.dragHandle,
   });
 
@@ -1514,6 +1619,8 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
     final hasNotes = notesText.isNotEmpty;
     final linkText = (item.link ?? '').trim();
     final hasLink = linkText.isNotEmpty;
+    final locationText = (item.location ?? '').trim();
+    final hasLocation = locationText.isNotEmpty;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1589,10 +1696,10 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
               context,
             ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
           ),
-          if ((item.location ?? '').isNotEmpty) ...[
+          if (hasLocation) ...[
             const SizedBox(height: 6),
             Text(
-              item.location!,
+              locationText,
               style: Theme.of(
                 context,
               ).textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
@@ -1609,9 +1716,20 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
                 background: const Color(0xFFF8FAFC),
                 foreground: const Color(0xFF475569),
               ),
+              if (hasLocation)
+                GestureDetector(
+                  onTap: () => _openInMaps(context, locationText),
+                  child: _Pill(
+                    icon: Icons.map_outlined,
+                    label: 'Maps',
+                    background: const Color(0xFFF8FAFC),
+                    foreground: const Color(0xFF475569),
+                  ),
+                ),
               if (hasLink)
                 GestureDetector(
-                  onTap: () async {
+                  onTap: () => _openExternalLink(context, linkText),
+                  onLongPress: () async {
                     await Clipboard.setData(ClipboardData(text: linkText));
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -1620,7 +1738,7 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
                   },
                   child: _Pill(
                     icon: Icons.link_outlined,
-                    label: 'Link',
+                    label: 'Open link',
                     background: const Color(0xFFF8FAFC),
                     foreground: const Color(0xFF475569),
                   ),
@@ -1629,6 +1747,11 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
                 onPressed: widget.onEditNotes,
                 icon: Icon(hasNotes ? Icons.edit_note : Icons.add_comment),
                 label: Text(hasNotes ? 'Edit note' : 'Add note'),
+              ),
+              TextButton.icon(
+                onPressed: widget.onOpenComments,
+                icon: const Icon(Icons.chat_bubble_outline),
+                label: const Text('Comments'),
               ),
             ],
           ),
@@ -1701,6 +1824,7 @@ class _PlannerItemCardState extends State<_PlannerItemCard> {
 
 class _ChecklistTab extends StatefulWidget {
   final Trip trip;
+  final Map<String, UserProfile?> profiles;
   final String currentUserId;
   final Future<bool> Function(Trip, MemberChecklist) onUpdateMember;
   final Future<bool> Function(Trip, ChecklistItem) onUpsertShared;
@@ -1708,6 +1832,7 @@ class _ChecklistTab extends StatefulWidget {
 
   const _ChecklistTab({
     required this.trip,
+    required this.profiles,
     required this.currentUserId,
     required this.onUpdateMember,
     required this.onUpsertShared,
@@ -1785,6 +1910,7 @@ class _ChecklistTabState extends State<_ChecklistTab> {
           const SizedBox(height: 12),
           _MemberChecklistCard(
             member: currentMember,
+            profiles: widget.profiles,
             entry: _entryForMember(trip, currentMember.userId),
             canEdit: true,
             onChanged: (updated) => _updateMember(trip, updated),
@@ -1982,12 +2108,14 @@ class _SegmentOption extends StatelessWidget {
 
 class _MemberChecklistCard extends StatelessWidget {
   final Member member;
+  final Map<String, UserProfile?> profiles;
   final MemberChecklist entry;
   final bool canEdit;
   final ValueChanged<MemberChecklist> onChanged;
 
   const _MemberChecklistCard({
     required this.member,
+    required this.profiles,
     required this.entry,
     required this.canEdit,
     required this.onChanged,
@@ -1995,6 +2123,16 @@ class _MemberChecklistCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final displayName = _displayNameForUser(
+      userId: member.userId,
+      fallback: member.name,
+      profiles: profiles,
+    );
+    final photoUrl = _photoUrlForUser(
+      userId: member.userId,
+      fallback: member.avatarUrl,
+      profiles: profiles,
+    );
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
@@ -2008,10 +2146,10 @@ class _MemberChecklistCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              _Avatar(initials: _initials(member.name)),
+              _Avatar(initials: _initials(displayName), photoUrl: photoUrl),
               const SizedBox(width: 12),
               Text(
-                member.name,
+                displayName,
                 style: Theme.of(
                   context,
                 ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
@@ -2137,6 +2275,8 @@ class _SharedChecklistTile extends StatelessWidget {
 
 class _StoryTab extends StatelessWidget {
   final Trip trip;
+  final Map<String, UserProfile?> profiles;
+  final List<WallComment> comments;
   final TextEditingController commentController;
   final VoidCallback onSendComment;
   final ValueChanged<bool> onTogglePublish;
@@ -2147,6 +2287,8 @@ class _StoryTab extends StatelessWidget {
 
   const _StoryTab({
     required this.trip,
+    required this.profiles,
+    required this.comments,
     required this.commentController,
     required this.onSendComment,
     required this.onTogglePublish,
@@ -2308,6 +2450,7 @@ class _StoryTab extends StatelessWidget {
             (moment) => _MomentCard(
               moment: moment,
               members: trip.members,
+              profiles: profiles,
               onToggleVisibility: () => onToggleMoment(moment),
             ),
           ),
@@ -2342,15 +2485,19 @@ class _StoryTab extends StatelessWidget {
           ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 8),
-        if (trip.story.wallComments.isEmpty)
+        if (comments.isEmpty)
           const _InlineEmptyState(
             title: 'No comments yet',
             subtitle: 'Be the first to react to this story.',
             icon: Icons.chat_bubble_outline,
           )
         else
-          ...trip.story.wallComments.map(
-            (comment) => _CommentCard(comment: comment, members: trip.members),
+          ...comments.map(
+            (comment) => _CommentCard(
+              comment: comment,
+              members: trip.members,
+              profiles: profiles,
+            ),
           ),
         const SizedBox(height: 12),
         Row(
@@ -2394,6 +2541,7 @@ class _StoryTab extends StatelessWidget {
 
 class _PeopleTab extends StatelessWidget {
   final Trip trip;
+  final Map<String, UserProfile?> profiles;
   final VoidCallback onRequestJoin;
   final void Function(String, JoinRequestStatus) onRespondJoin;
   final String currentUserId;
@@ -2403,6 +2551,7 @@ class _PeopleTab extends StatelessWidget {
 
   const _PeopleTab({
     required this.trip,
+    required this.profiles,
     required this.onRequestJoin,
     required this.onRespondJoin,
     required this.currentUserId,
@@ -2444,7 +2593,9 @@ class _PeopleTab extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 8),
-        ...trip.members.map((member) => _MemberTile(member: member)),
+        ...trip.members.map(
+          (member) => _MemberTile(member: member, profiles: profiles),
+        ),
         const SizedBox(height: 16),
         Row(
           children: [
@@ -2483,6 +2634,7 @@ class _PeopleTab extends StatelessWidget {
             (request) => _JoinRequestCard(
               request: request,
               members: trip.members,
+              profiles: profiles,
               onRespond: onRespondJoin,
               isBusy: isResponding(request.id),
             ),
@@ -2519,20 +2671,30 @@ class _PeopleTab extends StatelessWidget {
 
 class _ChatTab extends StatefulWidget {
   final Trip trip;
+  final Map<String, UserProfile?> profiles;
+  final List<ChatMessage> messages;
   final TextEditingController chatController;
   final VoidCallback onSend;
   final String currentUserId;
   final bool isSending;
   final List<_PendingChatEntry> pendingMessages;
+  final bool canLoadMore;
+  final bool isLoadingMore;
+  final VoidCallback onLoadMore;
   final void Function(_PendingChatEntry entry) onRetry;
 
   const _ChatTab({
     required this.trip,
+    required this.profiles,
+    required this.messages,
     required this.chatController,
     required this.onSend,
     required this.currentUserId,
     required this.isSending,
     required this.pendingMessages,
+    required this.canLoadMore,
+    required this.isLoadingMore,
+    required this.onLoadMore,
     required this.onRetry,
   });
 
@@ -2563,15 +2725,15 @@ class _ChatTabState extends State<_ChatTab> {
 
   @override
   Widget build(BuildContext context) {
-    final trip = widget.trip;
     final pending = widget.pendingMessages;
+    final messages = widget.messages;
     return Column(
       children: [
         Expanded(
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
-              if (trip.chat.isEmpty && pending.isEmpty)
+              if (messages.isEmpty && pending.isEmpty)
                 const _InlineEmptyState(
                   title: 'No messages yet',
                   subtitle: 'Say hi and keep the trip aligned in real time.',
@@ -2579,10 +2741,29 @@ class _ChatTabState extends State<_ChatTab> {
                 )
               else
                 ...[
-                  ...trip.chat.map(
+                  if (widget.canLoadMore)
+                    TextButton.icon(
+                      onPressed: widget.isLoadingMore
+                          ? null
+                          : widget.onLoadMore,
+                      icon: widget.isLoadingMore
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.history, size: 16),
+                      label: Text(
+                        widget.isLoadingMore
+                            ? 'Loading...'
+                            : 'Load earlier messages',
+                      ),
+                    ),
+                  ...messages.map(
                     (message) => _ChatBubble(
                       message: message,
-                      members: trip.members,
+                      members: widget.trip.members,
+                      profiles: widget.profiles,
                       currentUserId: widget.currentUserId,
                       showTimestamp: _expandedTimestamps.contains(message.id),
                       onLongPress: () async {
@@ -2594,7 +2775,8 @@ class _ChatTabState extends State<_ChatTab> {
                   ...pending.map(
                     (entry) => _ChatBubble(
                       message: entry.message,
-                      members: trip.members,
+                      members: widget.trip.members,
+                      profiles: widget.profiles,
                       currentUserId: widget.currentUserId,
                       showTimestamp: false,
                       onLongPress: () {},
@@ -2644,11 +2826,13 @@ class _ChatTabState extends State<_ChatTab> {
 class _MomentCard extends StatelessWidget {
   final StoryMoment moment;
   final List<Member> members;
+  final Map<String, UserProfile?> profiles;
   final VoidCallback? onToggleVisibility;
 
   const _MomentCard({
     required this.moment,
     required this.members,
+    required this.profiles,
     this.onToggleVisibility,
   });
 
@@ -2657,6 +2841,16 @@ class _MomentCard extends StatelessWidget {
     final author = members.firstWhere(
       (m) => m.userId == moment.authorId,
       orElse: () => members.first,
+    );
+    final authorName = _displayNameForUser(
+      userId: author.userId,
+      fallback: author.name,
+      profiles: profiles,
+    );
+    final authorPhoto = _photoUrlForUser(
+      userId: author.userId,
+      fallback: author.avatarUrl,
+      profiles: profiles,
     );
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -2669,14 +2863,14 @@ class _MomentCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _Avatar(initials: _initials(author.name)),
+          _Avatar(initials: _initials(authorName), photoUrl: authorPhoto),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  author.name,
+                  authorName,
                   style: Theme.of(
                     context,
                   ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
@@ -2735,14 +2929,29 @@ class _MomentCard extends StatelessWidget {
 class _CommentCard extends StatelessWidget {
   final WallComment comment;
   final List<Member> members;
+  final Map<String, UserProfile?> profiles;
 
-  const _CommentCard({required this.comment, required this.members});
+  const _CommentCard({
+    required this.comment,
+    required this.members,
+    required this.profiles,
+  });
 
   @override
   Widget build(BuildContext context) {
     final author = members.firstWhere(
       (m) => m.userId == comment.authorId,
       orElse: () => members.first,
+    );
+    final authorName = _displayNameForUser(
+      userId: author.userId,
+      fallback: author.name,
+      profiles: profiles,
+    );
+    final authorPhoto = _photoUrlForUser(
+      userId: author.userId,
+      fallback: author.avatarUrl,
+      profiles: profiles,
     );
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -2754,14 +2963,238 @@ class _CommentCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _Avatar(initials: _initials(author.name)),
+          _Avatar(initials: _initials(authorName), photoUrl: authorPhoto),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  author.name,
+                  authorName,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  comment.text,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF475569),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            _timeAgo(comment.createdAt),
+            style: Theme.of(
+              context,
+            ).textTheme.labelSmall?.copyWith(color: const Color(0xFF94A3B8)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ItineraryCommentsSheet extends ConsumerStatefulWidget {
+  final String tripId;
+  final ItineraryItem item;
+  final List<Member> members;
+  final Map<String, UserProfile?> profiles;
+
+  const _ItineraryCommentsSheet({
+    required this.tripId,
+    required this.item,
+    required this.members,
+    required this.profiles,
+  });
+
+  @override
+  ConsumerState<_ItineraryCommentsSheet> createState() =>
+      _ItineraryCommentsSheetState();
+}
+
+class _ItineraryCommentsSheetState
+    extends ConsumerState<_ItineraryCommentsSheet> {
+  final TextEditingController _controller = TextEditingController();
+  bool _isSending = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sendComment() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty || _isSending) return;
+    setState(() => _isSending = true);
+    final allowed = await ensureSignedIn(
+      context,
+      ref,
+      message: 'Sign in to comment on this item.',
+    );
+    if (!mounted) return;
+    if (!allowed) {
+      setState(() => _isSending = false);
+      return;
+    }
+    final session = ref.read(authSessionProvider).value;
+    if (session == null) {
+      setState(() => _isSending = false);
+      return;
+    }
+    final comment = ItineraryComment(
+      id: const Uuid().v4(),
+      authorId: session.userId,
+      text: text,
+      createdAt: DateTime.now(),
+    );
+    final success = await runGuarded(
+      context,
+      () async {
+        final repo = ref.read(repositoryProvider);
+        await repo.addItineraryComment(
+          widget.tripId,
+          widget.item.id,
+          comment,
+        );
+        _controller.clear();
+      },
+      errorMessage: 'Unable to send comment.',
+    );
+    if (!mounted) return;
+    if (!success && _controller.text.isEmpty) {
+      _controller.text = text;
+    }
+    setState(() => _isSending = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final commentsAsync = ref.watch(
+      itineraryCommentsStreamProvider((widget.tripId, widget.item.id)),
+    );
+    final comments = commentsAsync.value ?? const <ItineraryComment>[];
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Comments',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          widget.item.title,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: const Color(0xFF64748B),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (comments.isEmpty)
+          const _InlineEmptyState(
+            title: 'No comments yet',
+            subtitle: 'Add the first note for this item.',
+            icon: Icons.chat_bubble_outline,
+          )
+        else
+          ...comments.map(
+            (comment) => _ItineraryCommentCard(
+              comment: comment,
+              members: widget.members,
+              profiles: widget.profiles,
+            ),
+          ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                decoration: InputDecoration(
+                  hintText: 'Write a comment... ',
+                  filled: true,
+                  fillColor: const Color(0xFFF8FAFC),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton(
+              onPressed: _isSending ? null : _sendComment,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0F172A),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              child: const Text('Send'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ItineraryCommentCard extends StatelessWidget {
+  final ItineraryComment comment;
+  final List<Member> members;
+  final Map<String, UserProfile?> profiles;
+
+  const _ItineraryCommentCard({
+    required this.comment,
+    required this.members,
+    required this.profiles,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final author = members.firstWhere(
+      (m) => m.userId == comment.authorId,
+      orElse: () => members.first,
+    );
+    final authorName = _displayNameForUser(
+      userId: author.userId,
+      fallback: author.name,
+      profiles: profiles,
+    );
+    final authorPhoto = _photoUrlForUser(
+      userId: author.userId,
+      fallback: author.avatarUrl,
+      profiles: profiles,
+    );
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        children: [
+          _Avatar(initials: _initials(authorName), photoUrl: authorPhoto),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  authorName,
                   style: Theme.of(
                     context,
                   ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
@@ -2814,12 +3247,14 @@ class _PhotoTile extends StatelessWidget {
 class _JoinRequestCard extends StatelessWidget {
   final JoinRequest request;
   final List<Member> members;
+  final Map<String, UserProfile?> profiles;
   final void Function(String, JoinRequestStatus) onRespond;
   final bool isBusy;
 
   const _JoinRequestCard({
     required this.request,
     required this.members,
+    required this.profiles,
     required this.onRespond,
     required this.isBusy,
   });
@@ -2829,6 +3264,16 @@ class _JoinRequestCard extends StatelessWidget {
     final author = members.firstWhere(
       (m) => m.userId == request.userId,
       orElse: () => members.first,
+    );
+    final authorName = _displayNameForUser(
+      userId: request.userId,
+      fallback: author.name,
+      profiles: profiles,
+    );
+    final authorPhoto = _photoUrlForUser(
+      userId: request.userId,
+      fallback: author.avatarUrl,
+      profiles: profiles,
     );
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -2843,14 +3288,14 @@ class _JoinRequestCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              _Avatar(initials: _initials(author.name)),
+              _Avatar(initials: _initials(authorName), photoUrl: authorPhoto),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      author.name,
+                      authorName,
                       style: Theme.of(context).textTheme.labelLarge?.copyWith(
                         fontWeight: FontWeight.w800,
                       ),
@@ -2911,12 +3356,23 @@ class _JoinRequestCard extends StatelessWidget {
 
 class _MemberTile extends StatelessWidget {
   final Member member;
+  final Map<String, UserProfile?> profiles;
 
-  const _MemberTile({required this.member});
+  const _MemberTile({required this.member, required this.profiles});
 
   @override
   Widget build(BuildContext context) {
     final roleLabel = _roleLabel(member.role);
+    final displayName = _displayNameForUser(
+      userId: member.userId,
+      fallback: member.name,
+      profiles: profiles,
+    );
+    final photoUrl = _photoUrlForUser(
+      userId: member.userId,
+      fallback: member.avatarUrl,
+      profiles: profiles,
+    );
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(14),
@@ -2927,14 +3383,14 @@ class _MemberTile extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _Avatar(initials: _initials(member.name)),
+          _Avatar(initials: _initials(displayName), photoUrl: photoUrl),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  member.name,
+                  displayName,
                   style: Theme.of(
                     context,
                   ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
@@ -2962,6 +3418,7 @@ class _MemberTile extends StatelessWidget {
 class _ChatBubble extends StatelessWidget {
   final ChatMessage message;
   final List<Member> members;
+  final Map<String, UserProfile?> profiles;
   final String currentUserId;
   final bool showTimestamp;
   final VoidCallback onLongPress;
@@ -2972,6 +3429,7 @@ class _ChatBubble extends StatelessWidget {
   const _ChatBubble({
     required this.message,
     required this.members,
+    required this.profiles,
     required this.currentUserId,
     required this.showTimestamp,
     required this.onLongPress,
@@ -2986,6 +3444,11 @@ class _ChatBubble extends StatelessWidget {
     final author = members.firstWhere(
       (m) => m.userId == message.authorId,
       orElse: () => members.first,
+    );
+    final authorName = _displayNameForUser(
+      userId: author.userId,
+      fallback: author.name,
+      profiles: profiles,
     );
 
     return Align(
@@ -3016,7 +3479,7 @@ class _ChatBubble extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                author.name,
+                authorName,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: isFailed
                       ? const Color(0xFFB91C1C)
@@ -3410,8 +3873,9 @@ class _PulseBoxState extends State<_PulseBox> {
 
 class _Avatar extends StatelessWidget {
   final String initials;
+  final String? photoUrl;
 
-  const _Avatar({required this.initials});
+  const _Avatar({required this.initials, this.photoUrl});
 
   @override
   Widget build(BuildContext context) {
@@ -3423,12 +3887,21 @@ class _Avatar extends StatelessWidget {
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
-      child: Text(
-        initials,
-        style: Theme.of(
-          context,
-        ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
-      ),
+      child: photoUrl == null
+          ? Text(
+              initials,
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+            )
+          : ClipOval(
+              child: CachedNetworkImage(
+                imageUrl: photoUrl!,
+                fit: BoxFit.cover,
+                width: 36,
+                height: 36,
+              ),
+            ),
     );
   }
 }
@@ -3457,37 +3930,6 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-
-class _Chip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color tone;
-
-  const _Chip({
-    required this.icon,
-    required this.label,
-    this.tone = const Color(0xFFF1F5F9),
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: tone,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: const Color(0xFF475569)),
-          const SizedBox(width: 6),
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-        ],
-      ),
-    );
-  }
-}
 
 class _Pill extends StatelessWidget {
   final IconData? icon;
@@ -3537,9 +3979,43 @@ int _completionProgress(List<ItineraryItem> items) {
 }
 
 int _compareItineraryItems(ItineraryItem a, ItineraryItem b) {
+  final timeCompare = a.dateTime.compareTo(b.dateTime);
+  if (timeCompare != 0) return timeCompare;
   final orderCompare = a.order.compareTo(b.order);
   if (orderCompare != 0) return orderCompare;
-  return a.dateTime.compareTo(b.dateTime);
+  return a.createdAt.compareTo(b.createdAt);
+}
+
+Future<void> _openInMaps(BuildContext context, String location) async {
+  final encoded = Uri.encodeComponent(location);
+  final url = Platform.isIOS
+      ? 'http://maps.apple.com/?q=$encoded'
+      : 'https://www.google.com/maps/search/?api=1&query=$encoded';
+  final uri = Uri.parse(url);
+  final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!launched && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Unable to open maps')),
+    );
+  }
+}
+
+Uri _normalizeUrl(String url) {
+  final trimmed = url.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return Uri.parse(trimmed);
+  }
+  return Uri.parse('https://$trimmed');
+}
+
+Future<void> _openExternalLink(BuildContext context, String link) async {
+  final uri = _normalizeUrl(link);
+  final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  if (!launched && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Unable to open link')),
+    );
+  }
 }
 
 Map<int, List<ItineraryItem>> _groupItemsByDay(
@@ -3629,6 +4105,27 @@ String _joinStatusCopy(JoinRequestStatus status) {
   }
 }
 
+
+String _displayNameForUser({
+  required String userId,
+  required String fallback,
+  required Map<String, UserProfile?> profiles,
+}) {
+  final profile = profiles[userId];
+  final name = profile?.displayName ?? '';
+  if (name.trim().isNotEmpty) {
+    return name;
+  }
+  return fallback;
+}
+
+String? _photoUrlForUser({
+  required String userId,
+  required String? fallback,
+  required Map<String, UserProfile?> profiles,
+}) {
+  return profiles[userId]?.photoUrl ?? fallback;
+}
 IconData _iconForType(ItineraryItemType type) {
   switch (type) {
     case ItineraryItemType.flight:

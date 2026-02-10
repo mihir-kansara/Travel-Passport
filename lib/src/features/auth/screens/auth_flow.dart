@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:flutter_application_trial/src/screens/welcome_screen.dart';
-import 'package:flutter_application_trial/src/screens/auth_screen.dart';
+import 'package:flutter_application_trial/src/features/auth/screens/welcome_screen.dart';
+import 'package:flutter_application_trial/src/features/auth/screens/auth_screen.dart';
 
 class AuthFlow extends ConsumerStatefulWidget {
   const AuthFlow({super.key});
@@ -55,6 +55,7 @@ class _AuthFlowState extends ConsumerState<AuthFlow> {
       }
       _setLoading(false);
     } catch (e) {
+      debugPrint('Google sign-in failed: $e');
       _setError('Google sign-in failed. Try again.');
     }
   }
@@ -74,6 +75,7 @@ class _AuthFlowState extends ConsumerState<AuthFlow> {
       }
       _setLoading(false);
     } catch (e) {
+      debugPrint('Apple sign-in failed: $e');
       _setError('Apple sign-in failed. Try again.');
     }
   }
@@ -84,7 +86,8 @@ class _AuthFlowState extends ConsumerState<AuthFlow> {
       await FirebaseAuth.instance.signInAnonymously();
       _setLoading(false);
     } catch (e) {
-      _setError('Developer sign-in failed. Enable Anonymous auth.');
+      debugPrint('Guest sign-in failed: $e');
+      _setError('Guest sign-in failed. Enable Anonymous auth.');
     }
   }
 

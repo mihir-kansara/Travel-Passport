@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:rxdart/rxdart.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/repositories/repository.dart';
@@ -19,6 +20,31 @@ class FirestoreTripRepository implements TripRepository {
       firestore.collection('invites');
   CollectionReference<Map<String, dynamic>> get _users =>
       firestore.collection('users');
+
+  CollectionReference<Map<String, dynamic>> _itineraryCollection(String tripId) {
+    return _trips.doc(tripId).collection('itinerary');
+  }
+
+  CollectionReference<Map<String, dynamic>> _messagesCollection(String tripId) {
+    return _trips.doc(tripId).collection('messages');
+  }
+
+  CollectionReference<Map<String, dynamic>> _commentsCollection(String tripId) {
+    return _trips.doc(tripId).collection('comments');
+  }
+
+  CollectionReference<Map<String, dynamic>> _itineraryCommentsCollection(
+    String tripId,
+    String itemId,
+  ) {
+    return _itineraryCollection(tripId).doc(itemId).collection('comments');
+  }
+
+  String _dayKey(DateTime dateTime) {
+    final month = dateTime.month.toString().padLeft(2, '0');
+    final day = dateTime.day.toString().padLeft(2, '0');
+    return '${dateTime.year}-$month-$day';
+  }
 
   TripUpdate _buildUpdate({
     String? actorId,
@@ -42,8 +68,14 @@ class FirestoreTripRepository implements TripRepository {
   }
 
   Map<String, dynamic> _serializeTrip(Trip trip) {
+    final data = {...trip.toJson()};
+    data.remove('itinerary');
+    data.remove('chat');
+    final story = Map<String, dynamic>.from(data['story'] as Map? ?? {});
+    story.remove('wallComments');
+    data['story'] = story;
     return {
-      ...trip.toJson(),
+      ...data,
       'id': trip.id,
       'memberIds': trip.members.map((m) => m.userId).toList(),
     };
@@ -58,6 +90,162 @@ class FirestoreTripRepository implements TripRepository {
 
   Future<void> _saveTrip(Trip trip) async {
     await _trips.doc(trip.id).set(_serializeTrip(trip));
+  }
+
+  Map<String, dynamic> _itineraryDocData(
+    ItineraryItem item, {
+    bool preserveTimestamps = false,
+  }) {
+    return {
+      'id': item.id,
+      'tripId': item.tripId,
+      'dateTime': item.dateTime,
+      'dayKey': _dayKey(item.dateTime),
+      'title': item.title,
+      'description': item.description,
+      'notes': item.notes,
+      'type': item.type.name,
+      'location': item.location,
+      'imageUrl': item.imageUrl,
+      'assignedTo': item.assignedTo,
+      'assigneeId': item.assigneeId,
+      'assigneeName': item.assigneeName,
+      'link': item.link,
+      'isCompleted': item.isCompleted,
+      'status': item.status.name,
+      'manualOrder': item.order,
+      'order': item.order,
+      'createdAt': preserveTimestamps
+          ? Timestamp.fromDate(item.createdAt)
+          : FieldValue.serverTimestamp(),
+      'updatedAt': preserveTimestamps
+          ? Timestamp.fromDate(item.updatedAt)
+          : FieldValue.serverTimestamp(),
+      'createdAtClient': item.createdAt.toIso8601String(),
+    };
+  }
+
+  Map<String, dynamic> _chatDocData(
+    ChatMessage message, {
+    bool preserveTimestamps = false,
+  }) {
+    return {
+      'id': message.id,
+      'authorId': message.authorId,
+      'text': message.text,
+      'createdAt': preserveTimestamps
+          ? Timestamp.fromDate(message.createdAt)
+          : FieldValue.serverTimestamp(),
+      'updatedAt': preserveTimestamps
+          ? Timestamp.fromDate(message.createdAt)
+          : FieldValue.serverTimestamp(),
+      'createdAtClient': message.createdAt.toIso8601String(),
+    };
+  }
+
+  Map<String, dynamic> _commentDocData(
+    WallComment comment, {
+    bool preserveTimestamps = false,
+  }) {
+    return {
+      'id': comment.id,
+      'authorId': comment.authorId,
+      'text': comment.text,
+      'createdAt': preserveTimestamps
+          ? Timestamp.fromDate(comment.createdAt)
+          : FieldValue.serverTimestamp(),
+      'updatedAt': preserveTimestamps
+          ? Timestamp.fromDate(comment.createdAt)
+          : FieldValue.serverTimestamp(),
+      'createdAtClient': comment.createdAt.toIso8601String(),
+    };
+  }
+
+  Map<String, dynamic> _itineraryCommentDocData(
+    ItineraryComment comment, {
+    bool preserveTimestamps = false,
+  }) {
+    return {
+      'id': comment.id,
+      'authorId': comment.authorId,
+      'text': comment.text,
+      'createdAt': preserveTimestamps
+          ? Timestamp.fromDate(comment.createdAt)
+          : FieldValue.serverTimestamp(),
+      'updatedAt': preserveTimestamps
+          ? Timestamp.fromDate(comment.createdAt)
+          : FieldValue.serverTimestamp(),
+      'createdAtClient': comment.createdAt.toIso8601String(),
+    };
+  }
+
+  Future<void> _migrateItineraryIfNeeded(
+    String tripId,
+    List<ItineraryItem> legacyItems,
+  ) async {
+    if (legacyItems.isEmpty) return;
+    final existing = await _itineraryCollection(tripId).limit(1).get();
+    if (existing.docs.isNotEmpty) return;
+    final batch = firestore.batch();
+    final collection = _itineraryCollection(tripId);
+    for (final item in legacyItems) {
+      batch.set(collection.doc(item.id), _itineraryDocData(
+        item,
+        preserveTimestamps: true,
+      ));
+    }
+    batch.update(_trips.doc(tripId), {
+      'itinerary': [],
+      'migrations.itinerary': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
+  }
+
+  Future<void> _migrateChatIfNeeded(
+    String tripId,
+    List<ChatMessage> legacyMessages,
+  ) async {
+    if (legacyMessages.isEmpty) return;
+    final existing = await _messagesCollection(tripId).limit(1).get();
+    if (existing.docs.isNotEmpty) return;
+    final batch = firestore.batch();
+    final collection = _messagesCollection(tripId);
+    for (final message in legacyMessages) {
+      batch.set(collection.doc(message.id), _chatDocData(
+        message,
+        preserveTimestamps: true,
+      ));
+    }
+    batch.update(_trips.doc(tripId), {
+      'chat': [],
+      'migrations.chat': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
+  }
+
+  Future<void> _migrateWallCommentsIfNeeded(
+    String tripId,
+    List<WallComment> legacyComments,
+  ) async {
+    if (legacyComments.isEmpty) return;
+    final existing = await _commentsCollection(tripId).limit(1).get();
+    if (existing.docs.isNotEmpty) return;
+    final batch = firestore.batch();
+    final collection = _commentsCollection(tripId);
+    for (final comment in legacyComments) {
+      batch.set(collection.doc(comment.id), _commentDocData(
+        comment,
+        preserveTimestamps: true,
+      ));
+    }
+    batch.update(_trips.doc(tripId), {
+      'story.wallComments': [],
+      'migrations.tripComments': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
   }
 
   @override
@@ -90,6 +278,11 @@ class FirestoreTripRepository implements TripRepository {
   }) async {
     final now = DateTime.now();
     final doc = _trips.doc();
+    final profile = await getUserProfile(currentUserId);
+    final ownerName = profile?.displayName.isNotEmpty == true
+        ? profile!.displayName
+        : 'Traveler';
+    final ownerPhotoUrl = profile?.photoUrl;
     final update = _buildUpdate(
       text: 'Trip created. Invite your people and start planning.',
       kind: TripUpdateKind.system,
@@ -106,7 +299,8 @@ class FirestoreTripRepository implements TripRepository {
       members: [
         Member(
           userId: currentUserId,
-          name: 'You',
+          name: ownerName,
+          avatarUrl: ownerPhotoUrl,
           role: MemberRole.owner,
           joinedAt: now,
         ),
@@ -183,88 +377,44 @@ class FirestoreTripRepository implements TripRepository {
     String tripId,
     ItineraryItem item,
   ) async {
-    // TODO(travel-passport): Move itinerary to a subcollection to reduce doc contention.
-    final docRef = _trips.doc(tripId);
-    return firestore.runTransaction((transaction) async {
-      final snapshot = await transaction.get(docRef);
-      final trip = _deserializeTrip(snapshot);
-      if (trip == null) return item;
-      final existingIndex = trip.itinerary.indexWhere((i) => i.id == item.id);
-      final existingItem = existingIndex >= 0
-          ? trip.itinerary[existingIndex]
-          : null;
-      final updated = [...trip.itinerary];
-      String updateText;
-      var nextItem = item;
-      if (existingIndex >= 0) {
-        updated[existingIndex] = item;
-        if (existingItem != null &&
-            existingItem.isCompleted != item.isCompleted) {
-          updateText = item.isCompleted
-              ? 'Completed: ${item.title}.'
-              : 'Reopened: ${item.title}.';
-        } else {
-          updateText = 'Updated ${item.type.name}: ${item.title}.';
-        }
-      } else {
-        final nextOrder = _nextOrderForDay(trip, item.dateTime);
-        nextItem = item.copyWith(order: nextOrder);
-        updated.add(nextItem);
-        updateText = 'Added ${item.type.name}: ${item.title}.';
-      }
-      final updatedTrip = trip.copyWith(
-        itinerary: updated,
-        updatedAt: DateTime.now(),
+    final itemRef = _itineraryCollection(tripId).doc(item.id);
+    final existing = await itemRef.get();
+    var nextItem = item;
+    if (!existing.exists) {
+      final nextOrder = await _nextOrderForDayInCollection(
+        tripId,
+        item.dateTime,
       );
-      final update = _buildUpdate(
-        text: updateText,
-        kind: TripUpdateKind.planner,
-      );
-      transaction.set(docRef, _serializeTrip(_withUpdate(updatedTrip, update)));
-      return nextItem;
+      nextItem = item.copyWith(order: nextOrder);
+    }
+    await itemRef.set(_itineraryDocData(nextItem), SetOptions(merge: true));
+    await _trips.doc(tripId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
     });
+    return nextItem;
   }
 
-  int _nextOrderForDay(Trip trip, DateTime dateTime) {
-    final sameDay = trip.itinerary.where(
-      (item) =>
-          item.dateTime.year == dateTime.year &&
-          item.dateTime.month == dateTime.month &&
-          item.dateTime.day == dateTime.day,
-    );
-    var maxOrder = -1;
-    for (final item in sameDay) {
-      if (item.order > maxOrder) {
-        maxOrder = item.order;
-      }
-    }
-    return maxOrder + 1;
+  Future<int> _nextOrderForDayInCollection(
+    String tripId,
+    DateTime dateTime,
+  ) async {
+    final snapshot = await _itineraryCollection(tripId)
+        .where('dayKey', isEqualTo: _dayKey(dateTime))
+        .orderBy('manualOrder', descending: true)
+        .limit(1)
+        .get();
+    if (snapshot.docs.isEmpty) return 0;
+    final data = snapshot.docs.first.data();
+    final current = (data['manualOrder'] ?? data['order'] ?? 0) as int;
+    return current + 1;
   }
 
   @override
   Future<void> deleteItineraryItem(String tripId, String itemId) async {
-    final trip = await getTripById(tripId);
-    if (trip == null) return;
-    final removedItem = trip.itinerary.firstWhere(
-      (i) => i.id == itemId,
-      orElse: () => ItineraryItem(
-        id: itemId,
-        tripId: tripId,
-        dateTime: DateTime.now(),
-        title: 'An item',
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      ),
-    );
-    final updated = trip.copyWith(
-      itinerary: trip.itinerary.where((i) => i.id != itemId).toList(),
-      updatedAt: DateTime.now(),
-    );
-    final update = _buildUpdate(
-      text: 'Removed ${removedItem.title} from the plan.',
-      kind: TripUpdateKind.planner,
-    );
-    await _saveTrip(_withUpdate(updated, update));
+    await _itineraryCollection(tripId).doc(itemId).delete();
+    await _trips.doc(tripId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   @override
@@ -272,27 +422,20 @@ class FirestoreTripRepository implements TripRepository {
     String tripId,
     List<ItineraryItem> items,
   ) async {
-    // TODO(travel-passport): Move itinerary to a subcollection to reduce doc contention.
     if (items.isEmpty) return;
-    final docRef = _trips.doc(tripId);
-    await firestore.runTransaction((transaction) async {
-      final snapshot = await transaction.get(docRef);
-      final trip = _deserializeTrip(snapshot);
-      if (trip == null) return;
-      final updatesById = {for (final item in items) item.id: item};
-      final updatedItinerary = trip.itinerary.map((item) {
-        return updatesById[item.id] ?? item;
-      }).toList();
-      final updatedTrip = trip.copyWith(
-        itinerary: updatedItinerary,
-        updatedAt: DateTime.now(),
-      );
-      final update = _buildUpdate(
-        text: 'Reordered the itinerary for the day.',
-        kind: TripUpdateKind.planner,
-      );
-      transaction.set(docRef, _serializeTrip(_withUpdate(updatedTrip, update)));
+    final batch = firestore.batch();
+    final collection = _itineraryCollection(tripId);
+    for (final item in items) {
+      batch.update(collection.doc(item.id), {
+        'manualOrder': item.order,
+        'order': item.order,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    batch.update(_trips.doc(tripId), {
+      'updatedAt': FieldValue.serverTimestamp(),
     });
+    await batch.commit();
   }
 
   @override
@@ -300,8 +443,21 @@ class FirestoreTripRepository implements TripRepository {
     String tripId, {
     DateTime? day,
   }) async {
+    var query = _itineraryCollection(tripId)
+        .orderBy('dayKey')
+        .orderBy('manualOrder')
+        .orderBy('dateTime');
+    if (day != null) {
+      query = query.where('dayKey', isEqualTo: _dayKey(day));
+    }
+    final snapshot = await query.get();
+    final items = snapshot.docs
+        .map((doc) => ItineraryItem.fromFirestore(doc.data()))
+        .toList();
+    if (items.isNotEmpty) return items;
     final trip = await getTripById(tripId);
     if (trip == null) return [];
+    await _migrateItineraryIfNeeded(tripId, trip.itinerary);
     if (day == null) return trip.itinerary;
     return trip.getItemsForDay(trip.startDate.difference(day).inDays);
   }
@@ -399,32 +555,25 @@ class FirestoreTripRepository implements TripRepository {
 
   @override
   Future<void> addWallComment(String tripId, WallComment comment) async {
-    // TODO(travel-passport): Move wall comments to a subcollection.
-    final trip = await getTripById(tripId);
-    if (trip == null) return;
-    final updatedComments = [...trip.story.wallComments, comment];
-    final stats = trip.story.wallStats.copyWith(
-      comments: trip.story.wallStats.comments + 1,
-    );
-    await _saveTrip(
-      trip.copyWith(
-        story: trip.story.copyWith(
-          wallComments: updatedComments,
-          wallStats: stats,
-        ),
-        updatedAt: DateTime.now(),
-      ),
-    );
+    await _commentsCollection(tripId)
+        .doc(comment.id)
+        .set(_commentDocData(comment));
+    await _trips.doc(tripId).set({
+      'story': {
+        'wallStats': {'comments': FieldValue.increment(1)},
+      },
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   @override
   Future<void> sendChatMessage(String tripId, ChatMessage message) async {
-    // TODO(travel-passport): Move chat to a subcollection.
-    final trip = await getTripById(tripId);
-    if (trip == null) return;
-    await _saveTrip(
-      trip.copyWith(chat: [...trip.chat, message], updatedAt: DateTime.now()),
-    );
+    await _messagesCollection(tripId)
+        .doc(message.id)
+        .set(_chatDocData(message));
+    await _trips.doc(tripId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   @override
@@ -527,11 +676,16 @@ class FirestoreTripRepository implements TripRepository {
       final req = updatedRequests.firstWhere((r) => r.id == requestId);
       final exists = updatedMembers.any((m) => m.userId == req.userId);
       if (!exists) {
+        final profile = await getUserProfile(req.userId);
+        final displayName = profile?.displayName.isNotEmpty == true
+            ? profile!.displayName
+            : 'Traveler';
         updatedMembers = [
           ...updatedMembers,
           Member(
             userId: req.userId,
-            name: 'Guest Traveler',
+            name: displayName,
+            avatarUrl: profile?.photoUrl,
             role: MemberRole.viewer,
             joinedAt: DateTime.now(),
           ),
@@ -567,7 +721,140 @@ class FirestoreTripRepository implements TripRepository {
 
   @override
   Stream<List<ItineraryItem>> watchItinerary(String tripId) {
-    return watchTrip(tripId).map((trip) => trip?.itinerary ?? []);
+    final subStream = _itineraryCollection(tripId)
+        .orderBy('dayKey')
+        .orderBy('manualOrder')
+        .orderBy('dateTime')
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map((doc) {
+                return ItineraryItem.fromFirestore(doc.data());
+              }).toList(),
+        );
+    final legacyStream = watchTrip(tripId).asyncMap((trip) async {
+      final legacyItems = trip?.itinerary ?? [];
+      await _migrateItineraryIfNeeded(tripId, legacyItems);
+      return legacyItems;
+    });
+    return Rx.combineLatest2<List<ItineraryItem>, List<ItineraryItem>,
+        List<ItineraryItem>>(
+      subStream,
+      legacyStream,
+      (subItems, legacyItems) =>
+          subItems.isNotEmpty ? subItems : legacyItems,
+    );
+  }
+
+  @override
+  Stream<List<WallComment>> watchTripComments(String tripId, {int limit = 100}) {
+    final subStream = _commentsCollection(tripId)
+        .orderBy('createdAt')
+        .limit(limit)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map((doc) {
+                return WallComment.fromJson(doc.data());
+              }).toList(),
+        );
+    final legacyStream = watchTrip(tripId).asyncMap((trip) async {
+      final legacy = trip?.story.wallComments ?? [];
+      await _migrateWallCommentsIfNeeded(tripId, legacy);
+      return legacy;
+    });
+    return Rx.combineLatest2<List<WallComment>, List<WallComment>,
+        List<WallComment>>(
+      subStream,
+      legacyStream,
+      (subItems, legacyItems) =>
+          subItems.isNotEmpty ? subItems : legacyItems,
+    );
+  }
+
+  @override
+  Stream<List<ChatMessage>> watchChatMessages(
+    String tripId, {
+    int limit = 50,
+  }) {
+    final subStream = _messagesCollection(tripId)
+        .orderBy('createdAt', descending: true)
+        .orderBy('id', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snapshot) {
+          final messages = snapshot.docs
+              .map((doc) => ChatMessage.fromJson(doc.data()))
+              .toList();
+          messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          return messages;
+        });
+    final legacyStream = watchTrip(tripId).asyncMap((trip) async {
+      final legacy = trip?.chat ?? [];
+      await _migrateChatIfNeeded(tripId, legacy);
+      return legacy;
+    });
+    return Rx.combineLatest2<List<ChatMessage>, List<ChatMessage>,
+        List<ChatMessage>>(
+      subStream,
+      legacyStream,
+      (subItems, legacyItems) =>
+          subItems.isNotEmpty ? subItems : legacyItems,
+    );
+  }
+
+  @override
+  Future<List<ChatMessage>> fetchChatMessagesPage(
+    String tripId, {
+    int limit = 50,
+    ChatMessagesCursor? before,
+  }) async {
+    var query = _messagesCollection(tripId)
+        .orderBy('createdAt', descending: true)
+        .orderBy('id', descending: true)
+        .limit(limit);
+    if (before != null) {
+      query = query.startAfter([
+        Timestamp.fromDate(before.createdAt),
+        before.messageId,
+      ]);
+    }
+    final snapshot = await query.get();
+    final messages = snapshot.docs
+        .map((doc) => ChatMessage.fromJson(doc.data()))
+        .toList();
+    messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return messages;
+  }
+
+  @override
+  Stream<List<ItineraryComment>> watchItineraryComments(
+    String tripId,
+    String itemId,
+  ) {
+    return _itineraryCommentsCollection(tripId, itemId)
+        .orderBy('createdAt')
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map((doc) {
+                return ItineraryComment.fromJson(doc.data());
+              }).toList(),
+        );
+  }
+
+  @override
+  Future<void> addItineraryComment(
+    String tripId,
+    String itemId,
+    ItineraryComment comment,
+  ) async {
+    await _itineraryCommentsCollection(tripId, itemId)
+        .doc(comment.id)
+        .set(_itineraryCommentDocData(comment));
+    await _itineraryCollection(tripId).doc(itemId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   @override
@@ -581,6 +868,8 @@ class FirestoreTripRepository implements TripRepository {
 
   @override
   Future<void> updateUserProfile(UserProfile profile) async {
-    await _users.doc(profile.userId).set(profile.toFirestore());
+    await _users
+        .doc(profile.userId)
+        .set(profile.toFirestore(), SetOptions(merge: true));
   }
 }

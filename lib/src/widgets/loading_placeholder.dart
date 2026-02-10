@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_application_trial/ui/app_colors.dart';
-import 'package:flutter_application_trial/ui/app_radii.dart';
-import 'package:flutter_application_trial/ui/app_spacing.dart';
+import 'package:flutter_application_trial/src/app_theme.dart';
 
 class LoadingPlaceholder extends StatelessWidget {
   final int itemCount;

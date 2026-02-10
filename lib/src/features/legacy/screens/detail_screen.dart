@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_application_trial/src/models/item.dart';
+import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 
 class DetailScreen extends StatefulWidget {
   final Item item;
@@ -26,8 +27,9 @@ class _DetailScreenState extends State<DetailScreen> {
   @override
   Widget build(BuildContext context) {
     final it = widget.item;
-    return Scaffold(
-      appBar: AppBar(title: Text(it.title), elevation: 0),
+    return AppScaffold(
+      title: it.title,
+      padding: EdgeInsets.zero,
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,

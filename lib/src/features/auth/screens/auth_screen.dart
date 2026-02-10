@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 
 class AuthScreen extends StatelessWidget {
   final VoidCallback onBack;
@@ -20,7 +21,9 @@ class AuthScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return AppScaffold(
+      showAppBar: false,
+      padding: EdgeInsets.zero,
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -71,7 +74,7 @@ class AuthScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 _AuthButton(
-                  label: 'Continue as Developer',
+                  label: 'Continue as guest',
                   icon: Icons.bolt,
                   onTap: isLoading ? null : onDeveloper,
                   foreground: const Color(0xFF0F172A),

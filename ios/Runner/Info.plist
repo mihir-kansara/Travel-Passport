@@ -64,5 +64,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Add a profile photo for your trips.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save a profile photo to personalize your trips.</string>
 </dict>
 </plist>

@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
-import 'package:flutter_application_trial/src/screens/trip_detail_screen.dart';
+import 'package:flutter_application_trial/src/utils/invite_utils.dart';
+import 'package:flutter_application_trial/src/features/trips/screens/trip_detail_screen.dart';
+import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
+import 'package:flutter_application_trial/src/widgets/primary_button.dart';
 
 final _inviteJoinProvider = FutureProvider.family<_InviteJoinData, String>(
   (ref, token) async {
@@ -21,9 +24,9 @@ final _inviteJoinProvider = FutureProvider.family<_InviteJoinData, String>(
 );
 
 class InviteJoinScreen extends ConsumerStatefulWidget {
-  final String token;
+  final String inviteInput;
 
-  const InviteJoinScreen({super.key, required this.token});
+  const InviteJoinScreen({super.key, required this.inviteInput});
 
   @override
   ConsumerState<InviteJoinScreen> createState() => _InviteJoinScreenState();
@@ -31,44 +34,113 @@ class InviteJoinScreen extends ConsumerStatefulWidget {
 
 class _InviteJoinScreenState extends ConsumerState<InviteJoinScreen> {
   bool _joining = false;
+  bool _handledMemberRedirect = false;
+  late final TextEditingController _inputController;
+  String? _token;
+  String? _inputError;
+
+  @override
+  void initState() {
+    super.initState();
+    _inputController = TextEditingController(text: widget.inviteInput);
+    _token = parseInviteTokenFromText(widget.inviteInput);
+    if (_token == null) {
+      _inputError = 'Paste a valid invite token or link.';
+    }
+  }
+
+  @override
+  void dispose() {
+    _inputController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final inviteAsync = ref.watch(_inviteJoinProvider(widget.token));
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Join Trip'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.home_outlined),
-            onPressed: () =>
-                Navigator.of(context).popUntil((route) => route.isFirst),
-          ),
-        ],
-      ),
-      body: inviteAsync.when(
-        data: (data) => _InviteContent(
-          trip: data.trip,
-          onJoin: _joining ? null : () => _handleJoin(data),
-          joining: _joining,
+    if (_token == null) {
+      return AppScaffold(
+        title: 'Join Trip',
+        onHome: () => Navigator.of(context).popUntil((route) => route.isFirst),
+        padding: EdgeInsets.zero,
+        body: _InviteInputState(
+          controller: _inputController,
+          errorText: _inputError,
+          onContinue: _handleTokenInput,
         ),
+      );
+    }
+    final inviteAsync = ref.watch(_inviteJoinProvider(_token!));
+    return AppScaffold(
+      title: 'Join Trip',
+      onHome: () => Navigator.of(context).popUntil((route) => route.isFirst),
+      padding: EdgeInsets.zero,
+      body: inviteAsync.when(
+        data: (data) {
+          final session = ref.watch(authSessionProvider).value;
+          if (session != null &&
+              data.trip.members
+                  .any((member) => member.userId == session.userId)) {
+            if (!_handledMemberRedirect) {
+              _handledMemberRedirect = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => TripDetailScreen(tripId: data.trip.id),
+                  ),
+                );
+                showGuardedSnackBar(
+                  context,
+                  'You are already a member of this trip.',
+                );
+              });
+            }
+            return const _InviteJoinLoading();
+          }
+          return _InviteContent(
+            trip: data.trip,
+            onJoin: _joining ? null : () => _handleJoin(data),
+            joining: _joining,
+          );
+        },
         loading: () => const _InviteJoinLoading(),
         error: (e, st) => _ErrorState(
-          message: 'Unable to load invite.',
-          onRetry: () => ref.refresh(_inviteJoinProvider(widget.token)),
+          message: _errorMessage(e),
+          onRetry: () => ref.refresh(_inviteJoinProvider(_token!)),
         ),
       ),
     );
   }
 
+  void _handleTokenInput() {
+    final token = parseInviteTokenFromText(_inputController.text);
+    setState(() {
+      _token = token;
+      _inputError = token == null ? 'Paste a valid invite token or link.' : null;
+    });
+  }
+
+  String _errorMessage(Object error) {
+    if (error is Exception) {
+      return error.toString().replaceFirst('Exception: ', '');
+    }
+    return 'Unable to load invite.';
+  }
+
   Future<void> _handleJoin(_InviteJoinData data) async {
     if (_joining) return;
     setState(() => _joining = true);
+    final token = _token;
+    if (token == null) {
+      if (mounted) setState(() => _joining = false);
+      return;
+    }
     final allowed = await ensureSignedIn(
       context,
       ref,
       message: 'Sign in to join this trip.',
-      pendingInviteToken: widget.token,
+      pendingInviteToken: token,
     );
     if (!mounted) return;
     if (!allowed) {
@@ -80,6 +152,12 @@ class _InviteJoinScreenState extends ConsumerState<InviteJoinScreen> {
       if (mounted) setState(() => _joining = false);
       return;
     }
+    final profile = await ref.read(currentUserProfileProvider.future);
+    if (!mounted) return;
+    final displayName = profile?.displayName.isNotEmpty == true
+        ? profile!.displayName
+        : session.displayName;
+    final photoUrl = profile?.photoUrl ?? session.avatarUrl;
     final success = await runGuarded(
       context,
       () async {
@@ -88,9 +166,9 @@ class _InviteJoinScreenState extends ConsumerState<InviteJoinScreen> {
           data.trip.id,
           Member(
             userId: session.userId,
-            name: session.displayName,
+            name: displayName,
             email: session.email,
-            avatarUrl: session.avatarUrl,
+            avatarUrl: photoUrl,
             role: MemberRole.collaborator,
             joinedAt: DateTime.now(),
           ),
@@ -158,29 +236,63 @@ class _InviteContent extends StatelessWidget {
           const Spacer(),
           SizedBox(
             width: double.infinity,
-            child: ElevatedButton(
+            child: PrimaryButton(
+              label: 'Join trip',
               onPressed: onJoin,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF4F46E5),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-              child: joining
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Text('Join trip'),
+              isLoading: joining,
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _InviteInputState extends StatelessWidget {
+  final TextEditingController controller;
+  final String? errorText;
+  final VoidCallback onContinue;
+
+  const _InviteInputState({
+    required this.controller,
+    required this.errorText,
+    required this.onContinue,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.link, size: 44),
+            const SizedBox(height: 12),
+            Text(
+              'Paste an invite token or link',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                hintText: 'Example: https://travelpassport.app/invite/...',
+                errorText: errorText,
+              ),
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => onContinue(),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: PrimaryButton(
+                label: 'Continue',
+                onPressed: onContinue,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

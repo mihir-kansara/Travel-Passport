@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
+import 'package:flutter_application_trial/src/widgets/primary_button.dart';
 
 class WelcomeScreen extends StatelessWidget {
   final VoidCallback onContinue;
@@ -7,7 +9,9 @@ class WelcomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return AppScaffold(
+      showAppBar: false,
+      padding: EdgeInsets.zero,
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -57,17 +61,9 @@ class WelcomeScreen extends StatelessWidget {
                     const Spacer(),
                     SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton(
+                      child: PrimaryButton(
+                        label: 'Continue',
                         onPressed: onContinue,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFF8FAFC),
-                          foregroundColor: const Color(0xFF0F172A),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(18),
-                          ),
-                        ),
-                        child: const Text('Continue'),
                       ),
                     ),
                     const SizedBox(height: 12),

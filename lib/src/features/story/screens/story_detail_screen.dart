@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
+import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
 
 class StoryDetailScreen extends ConsumerStatefulWidget {
   final String tripId;
@@ -44,19 +45,13 @@ class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
         });
       }),
     );
+    final commentsAsync = ref.watch(tripCommentsStreamProvider(widget.tripId));
     final currentUserId = ref.watch(authSessionProvider).value?.userId ?? '';
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Trip Story'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.home_outlined),
-            onPressed: () =>
-                Navigator.of(context).popUntil((route) => route.isFirst),
-          ),
-        ],
-      ),
+    return AppScaffold(
+      title: 'Trip Story',
+      onHome: () => Navigator.of(context).popUntil((route) => route.isFirst),
+      padding: EdgeInsets.zero,
       body: storyAsync.when(
         data: (payload) {
           if (payload == null) {
@@ -70,10 +65,11 @@ class _StoryDetailScreenState extends ConsumerState<StoryDetailScreen> {
             destination: payload.destination,
             heroImageUrl: payload.heroImageUrl,
             coverGradientId: payload.coverGradientId,
+            comments: commentsAsync.value ?? const [],
             commentController: _commentController,
             onLike: _isLiking
-              ? null
-              : () => _handleLike(payload.story, payload.storyId),
+                ? null
+                : () => _handleLike(payload.story, payload.storyId),
             onSendComment: _isSendingComment
                 ? null
                 : () => _handleSendComment(payload.storyId),
@@ -209,6 +205,7 @@ class _StoryDetailBody extends StatelessWidget {
   final String destination;
   final String? heroImageUrl;
   final int? coverGradientId;
+  final List<WallComment> comments;
   final TextEditingController commentController;
   final VoidCallback? onLike;
   final VoidCallback? onSendComment;
@@ -221,6 +218,7 @@ class _StoryDetailBody extends StatelessWidget {
     required this.destination,
     required this.heroImageUrl,
     required this.coverGradientId,
+    required this.comments,
     required this.commentController,
     required this.onLike,
     required this.onSendComment,
@@ -340,14 +338,14 @@ class _StoryDetailBody extends StatelessWidget {
           ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 8),
-        if (story.wallComments.isEmpty)
+        if (comments.isEmpty)
           const _InlineEmptyState(
             title: 'No comments yet',
             subtitle: 'Be the first to react to this story.',
             icon: Icons.chat_bubble_outline,
           )
         else
-          ...story.wallComments.map(
+          ...comments.map(
             (comment) => _CommentCard(comment: comment, members: members),
           ),
         const SizedBox(height: 12),

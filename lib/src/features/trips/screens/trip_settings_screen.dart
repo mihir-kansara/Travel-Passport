@@ -7,9 +7,11 @@ import 'package:flutter_application_trial/src/app_config.dart';
 import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
 import 'package:flutter_application_trial/src/providers.dart';
+import 'package:flutter_application_trial/src/repositories/repository.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
 import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
-import 'package:flutter_application_trial/src/widgets/buttons.dart';
+import 'package:flutter_application_trial/src/widgets/primary_button.dart';
+import 'package:flutter_application_trial/src/widgets/secondary_button.dart';
 import 'package:flutter_application_trial/src/widgets/section_header.dart';
 
 class TripSettingsScreen extends ConsumerStatefulWidget {
@@ -58,6 +60,12 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
           if (trip == null) {
             return const Center(child: Text('Trip not found'));
           }
+          final profilesAsync = ref.watch(
+            userProfilesProvider(
+              trip.members.map((m) => m.userId).toList(growable: false),
+            ),
+          );
+          final profiles = profilesAsync.value ?? <String, UserProfile?>{};
           if (!_initialized) {
             _initializeFromTrip(trip);
           }
@@ -153,47 +161,59 @@ class _TripSettingsScreenState extends ConsumerState<TripSettingsScreen> {
               ),
               const SizedBox(height: AppSpacing.lg),
               ...trip.members.map(
-                (member) => Container(
-                  margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-                  padding: const EdgeInsets.all(AppSpacing.lg),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(AppRadii.md),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 18,
-                        backgroundColor: AppColors.border,
-                        child: Text(
-                          _initials(member.name),
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(fontWeight: FontWeight.w800),
+                (member) {
+                  final profile = profiles[member.userId];
+                  final displayName = profile?.displayName.isNotEmpty == true
+                      ? profile!.displayName
+                      : member.name;
+                  final photoUrl = profile?.photoUrl ?? member.avatarUrl;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+                    padding: const EdgeInsets.all(AppSpacing.lg),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(AppRadii.md),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 18,
+                          backgroundColor: AppColors.border,
+                          backgroundImage: photoUrl != null
+                              ? CachedNetworkImageProvider(photoUrl)
+                              : null,
+                          child: photoUrl == null
+                              ? Text(
+                                  _initials(displayName),
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(fontWeight: FontWeight.w800),
+                                )
+                              : null,
                         ),
-                      ),
-                      const SizedBox(width: AppSpacing.md),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              member.name,
-                              style: Theme.of(context).textTheme.labelLarge
-                                  ?.copyWith(fontWeight: FontWeight.w800),
-                            ),
-                            const SizedBox(height: AppSpacing.xs),
-                            Text(
-                              member.role.name,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: AppColors.mutedText),
-                            ),
-                          ],
+                        const SizedBox(width: AppSpacing.md),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                displayName,
+                                style: Theme.of(context).textTheme.labelLarge
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                              const SizedBox(height: AppSpacing.xs),
+                              Text(
+                                member.role.name,
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: AppColors.mutedText),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
+                      ],
+                    ),
+                  );
+                },
               ),
               const SizedBox(height: AppSpacing.xxl),
               const SectionHeader(

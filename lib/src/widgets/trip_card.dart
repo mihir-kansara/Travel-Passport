@@ -2,10 +2,8 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_application_trial/src/models/trip.dart';
-import 'package:flutter_application_trial/ui/app_colors.dart';
-import 'package:flutter_application_trial/ui/app_radii.dart';
-import 'package:flutter_application_trial/ui/app_spacing.dart';
-import 'package:flutter_application_trial/widgets/avatar_row.dart';
+import 'package:flutter_application_trial/src/app_theme.dart';
+import 'package:flutter_application_trial/src/widgets/avatar_stack.dart';
 
 class TripCard extends StatelessWidget {
   final Trip trip;
@@ -105,7 +103,7 @@ class TripCard extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       _StatusChip(label: status),
-                      AvatarRow(members: trip.members),
+                      AvatarStack(initials: _memberInitials(trip)),
                     ],
                   ),
                   if (trip.description.isNotEmpty) ...[
@@ -218,6 +216,20 @@ String _statusLabel(Trip trip, bool isDraft) {
   if (trip.story.isLive) return 'Live';
   if (trip.isPast) return 'Past';
   return 'Upcoming';
+}
+
+List<String> _memberInitials(Trip trip) {
+  return trip.members
+      .map((member) => member.name)
+      .where((name) => name.trim().isNotEmpty)
+      .map((name) {
+        final parts = name.split(' ').where((p) => p.trim().isNotEmpty).toList();
+        if (parts.isEmpty) return 'U';
+        if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+        return (parts[0].substring(0, 1) + parts[1].substring(0, 1))
+            .toUpperCase();
+      })
+      .toList();
 }
 
 _StatusTone _statusTone(String label) {
