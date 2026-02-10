@@ -6,8 +6,6 @@
 // tree, read text, and verify that the values of widget properties are correct.
 
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,10 +15,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_application_trial/src/app.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
   GoogleFonts.config.allowRuntimeFetching = false;
 
-  ServicesBinding.instance.defaultBinaryMessenger.setMockMessageHandler(
+  binding.defaultBinaryMessenger.setMockMessageHandler(
     'flutter/assets',
     (message) async {
       final key = utf8.decode(message!.buffer.asUint8List());

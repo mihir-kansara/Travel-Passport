@@ -46,6 +46,30 @@ class FirestoreTripRepository implements TripRepository {
     return '${dateTime.year}-$month-$day';
   }
 
+  List<ItineraryItem> _sortedItineraryItems(List<ItineraryItem> items) {
+    final sorted = [...items];
+    sorted.sort((a, b) {
+      final dayCompare = _dayKey(a.dateTime).compareTo(_dayKey(b.dateTime));
+      if (dayCompare != 0) return dayCompare;
+      final orderCompare = a.order.compareTo(b.order);
+      if (orderCompare != 0) return orderCompare;
+      final timeCompare = a.dateTime.compareTo(b.dateTime);
+      if (timeCompare != 0) return timeCompare;
+      return a.id.compareTo(b.id);
+    });
+    return sorted;
+  }
+
+  List<ChatMessage> _sortedChatMessages(List<ChatMessage> messages) {
+    final sorted = [...messages];
+    sorted.sort((a, b) {
+      final timeCompare = a.createdAt.compareTo(b.createdAt);
+      if (timeCompare != 0) return timeCompare;
+      return a.id.compareTo(b.id);
+    });
+    return sorted;
+  }
+
   TripUpdate _buildUpdate({
     String? actorId,
     required String text,
@@ -400,13 +424,17 @@ class FirestoreTripRepository implements TripRepository {
   ) async {
     final snapshot = await _itineraryCollection(tripId)
         .where('dayKey', isEqualTo: _dayKey(dateTime))
-        .orderBy('manualOrder', descending: true)
-        .limit(1)
         .get();
     if (snapshot.docs.isEmpty) return 0;
-    final data = snapshot.docs.first.data();
-    final current = (data['manualOrder'] ?? data['order'] ?? 0) as int;
-    return current + 1;
+    var maxOrder = 0;
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final current = (data['manualOrder'] ?? data['order'] ?? 0) as int;
+      if (current > maxOrder) {
+        maxOrder = current;
+      }
+    }
+    return maxOrder + 1;
   }
 
   @override
@@ -443,23 +471,24 @@ class FirestoreTripRepository implements TripRepository {
     String tripId, {
     DateTime? day,
   }) async {
-    var query = _itineraryCollection(tripId)
-        .orderBy('dayKey')
-        .orderBy('manualOrder')
-        .orderBy('dateTime');
+    Query<Map<String, dynamic>> query = _itineraryCollection(tripId);
     if (day != null) {
       query = query.where('dayKey', isEqualTo: _dayKey(day));
     }
     final snapshot = await query.get();
-    final items = snapshot.docs
-        .map((doc) => ItineraryItem.fromFirestore(doc.data()))
-        .toList();
+    final items = _sortedItineraryItems(
+      snapshot.docs
+          .map((doc) => ItineraryItem.fromFirestore(doc.data()))
+          .toList(),
+    );
     if (items.isNotEmpty) return items;
     final trip = await getTripById(tripId);
     if (trip == null) return [];
     await _migrateItineraryIfNeeded(tripId, trip.itinerary);
-    if (day == null) return trip.itinerary;
-    return trip.getItemsForDay(trip.startDate.difference(day).inDays);
+    if (day == null) return _sortedItineraryItems(trip.itinerary);
+    return _sortedItineraryItems(
+      trip.getItemsForDay(day.difference(trip.startDate).inDays),
+    );
   }
 
   @override
@@ -721,17 +750,13 @@ class FirestoreTripRepository implements TripRepository {
 
   @override
   Stream<List<ItineraryItem>> watchItinerary(String tripId) {
-    final subStream = _itineraryCollection(tripId)
-        .orderBy('dayKey')
-        .orderBy('manualOrder')
-        .orderBy('dateTime')
-        .snapshots()
-        .map(
-          (snapshot) =>
-              snapshot.docs.map((doc) {
-                return ItineraryItem.fromFirestore(doc.data());
-              }).toList(),
-        );
+    final subStream = _itineraryCollection(tripId).snapshots().map(
+      (snapshot) => _sortedItineraryItems(
+        snapshot.docs
+            .map((doc) => ItineraryItem.fromFirestore(doc.data()))
+            .toList(),
+      ),
+    );
     final legacyStream = watchTrip(tripId).asyncMap((trip) async {
       final legacyItems = trip?.itinerary ?? [];
       await _migrateItineraryIfNeeded(tripId, legacyItems);
@@ -779,15 +804,14 @@ class FirestoreTripRepository implements TripRepository {
   }) {
     final subStream = _messagesCollection(tripId)
         .orderBy('createdAt', descending: true)
-        .orderBy('id', descending: true)
         .limit(limit)
         .snapshots()
         .map((snapshot) {
-          final messages = snapshot.docs
-              .map((doc) => ChatMessage.fromJson(doc.data()))
-              .toList();
-          messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-          return messages;
+          return _sortedChatMessages(
+            snapshot.docs
+                .map((doc) => ChatMessage.fromJson(doc.data()))
+                .toList(),
+          );
         });
     final legacyStream = watchTrip(tripId).asyncMap((trip) async {
       final legacy = trip?.chat ?? [];
@@ -811,20 +835,18 @@ class FirestoreTripRepository implements TripRepository {
   }) async {
     var query = _messagesCollection(tripId)
         .orderBy('createdAt', descending: true)
-        .orderBy('id', descending: true)
         .limit(limit);
     if (before != null) {
       query = query.startAfter([
         Timestamp.fromDate(before.createdAt),
-        before.messageId,
       ]);
     }
     final snapshot = await query.get();
-    final messages = snapshot.docs
-        .map((doc) => ChatMessage.fromJson(doc.data()))
-        .toList();
-    messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    return messages;
+    return _sortedChatMessages(
+      snapshot.docs
+          .map((doc) => ChatMessage.fromJson(doc.data()))
+          .toList(),
+    );
   }
 
   @override

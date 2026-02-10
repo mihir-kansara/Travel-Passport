@@ -8,9 +8,11 @@ import 'package:flutter_application_trial/src/features/invites/screens/invite_jo
 import 'package:flutter_application_trial/src/features/story/screens/story_detail_screen.dart';
 import 'package:flutter_application_trial/src/features/trips/screens/create_trip_screen.dart';
 import 'package:flutter_application_trial/src/features/trips/screens/trip_detail_screen.dart';
+import 'package:flutter_application_trial/src/features/profile/screens/profile_setup_screen.dart';
 import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
 import 'package:flutter_application_trial/src/utils/invite_utils.dart';
+import 'package:flutter_application_trial/src/utils/profile_utils.dart';
 import 'package:flutter_application_trial/src/widgets/empty_state_card.dart';
 import 'package:flutter_application_trial/src/widgets/loading_placeholder.dart';
 import 'package:flutter_application_trial/src/widgets/primary_button.dart';
@@ -45,9 +47,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   @override
   Widget build(BuildContext context) {
     final tripsAsync = ref.watch(userTripsProvider);
+    final session = ref.watch(authSessionProvider).value;
+    final profile = ref.watch(currentUserProfileProvider).value;
+    final showProfileBanner = session != null &&
+        (profile == null || !isValidDisplayName(profile.displayName));
 
     return tripsAsync.when(
-      data: (trips) => _buildContent(context, trips),
+      data: (trips) => _buildContent(context, trips, showProfileBanner),
       loading: () => const LoadingPlaceholder(itemCount: 5, itemHeight: 180),
       error: (e, st) => Center(
         child: Column(
@@ -62,7 +68,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     );
   }
 
-  Widget _buildContent(BuildContext context, List<Trip> trips) {
+  Widget _buildContent(
+    BuildContext context,
+    List<Trip> trips,
+    bool showProfileBanner,
+  ) {
     final wallTrips = trips.where((t) => t.story.publishToWall).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     final drafts = trips.where((t) => !t.isPublished).toList()
@@ -83,6 +93,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         padding: const EdgeInsets.only(bottom: AppSpacing.xl),
         children: [
           _HomeHeader(onCreate: _openCreateTrip, onJoin: _openJoinByToken),
+          if (showProfileBanner)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+              child: _ProfileCompletionBanner(),
+            ),
           if (liveStories.isNotEmpty) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
@@ -249,24 +264,78 @@ class _HomeHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppSpacing.md),
-          Row(
-            children: [
-              Expanded(
-                child: SecondaryButton(
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 240),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SecondaryButton(
                   label: 'Join a trip',
                   icon: Icons.link,
                   onPressed: onJoin,
                 ),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: PrimaryButton(
+                const SizedBox(height: AppSpacing.md),
+                PrimaryButton(
                   label: 'Create a trip',
                   icon: Icons.add,
                   onPressed: onCreate,
                 ),
-              ),
-            ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileCompletionBanner extends StatelessWidget {
+  const _ProfileCompletionBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.lg),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(AppRadii.md),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.person_outline, color: AppColors.primary),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Complete your profile',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  'Add a display name so collaborators recognize you.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.mutedText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const ProfileSetupScreen(),
+                ),
+              );
+            },
+            child: const Text('Finish'),
           ),
         ],
       ),

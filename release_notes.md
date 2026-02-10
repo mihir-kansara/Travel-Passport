@@ -1,0 +1,3 @@
+- Refactor app structure into feature-based folders.
+- Archive the duplicate project tree under archived/.
+- Add shared widgets and utilities for auth, invites, and profiles.

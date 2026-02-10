@@ -1,53 +1,65 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_application_trial/ui/app_colors.dart';
 
 class AppTextStyles {
   static TextTheme textTheme(TextTheme base) {
-    return GoogleFonts.plusJakartaSansTextTheme(base)
-        .copyWith(
-          headlineSmall: GoogleFonts.plusJakartaSans(
-            fontSize: 24,
-            fontWeight: FontWeight.w800,
-          ),
-          titleLarge: GoogleFonts.plusJakartaSans(
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-          ),
-          titleMedium: GoogleFonts.plusJakartaSans(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-          ),
-          titleSmall: GoogleFonts.plusJakartaSans(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-          ),
-          bodyLarge: GoogleFonts.plusJakartaSans(
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-          ),
-          bodyMedium: GoogleFonts.plusJakartaSans(
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
-          ),
-          bodySmall: GoogleFonts.plusJakartaSans(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-          ),
-          labelLarge: GoogleFonts.plusJakartaSans(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
-          labelMedium: GoogleFonts.plusJakartaSans(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-          ),
-          labelSmall: GoogleFonts.plusJakartaSans(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.4,
-          ),
-        )
-        .apply(bodyColor: AppColors.text, displayColor: AppColors.text);
+    const fontFamily = 'Plus Jakarta Sans';
+    final themed = base.copyWith(
+      headlineSmall: base.headlineSmall?.copyWith(
+        fontSize: 24,
+        fontWeight: FontWeight.w800,
+        fontFamily: fontFamily,
+      ),
+      titleLarge: base.titleLarge?.copyWith(
+        fontSize: 20,
+        fontWeight: FontWeight.w800,
+        fontFamily: fontFamily,
+      ),
+      titleMedium: base.titleMedium?.copyWith(
+        fontSize: 18,
+        fontWeight: FontWeight.w700,
+        fontFamily: fontFamily,
+      ),
+      titleSmall: base.titleSmall?.copyWith(
+        fontSize: 16,
+        fontWeight: FontWeight.w700,
+        fontFamily: fontFamily,
+      ),
+      bodyLarge: base.bodyLarge?.copyWith(
+        fontSize: 16,
+        fontWeight: FontWeight.w500,
+        fontFamily: fontFamily,
+      ),
+      bodyMedium: base.bodyMedium?.copyWith(
+        fontSize: 14,
+        fontWeight: FontWeight.w500,
+        fontFamily: fontFamily,
+      ),
+      bodySmall: base.bodySmall?.copyWith(
+        fontSize: 12,
+        fontWeight: FontWeight.w500,
+        fontFamily: fontFamily,
+      ),
+      labelLarge: base.labelLarge?.copyWith(
+        fontSize: 14,
+        fontWeight: FontWeight.w700,
+        fontFamily: fontFamily,
+      ),
+      labelMedium: base.labelMedium?.copyWith(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        fontFamily: fontFamily,
+      ),
+      labelSmall: base.labelSmall?.copyWith(
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.4,
+        fontFamily: fontFamily,
+      ),
+    );
+    return themed.apply(
+      bodyColor: AppColors.text,
+      displayColor: AppColors.text,
+    );
   }
 }

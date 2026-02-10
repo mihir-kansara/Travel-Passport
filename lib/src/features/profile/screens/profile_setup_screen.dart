@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/repositories/repository.dart';
 import 'package:flutter_application_trial/src/utils/profile_storage.dart';
@@ -79,18 +80,18 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
         updatedAt: now,
       );
 
-      await repo.updateUserProfile(profile);
-      await FirebaseAuth.instance.currentUser
-          ?.updateDisplayName(profile.displayName);
-      if (profile.photoUrl != null) {
-        await FirebaseAuth.instance.currentUser
-            ?.updatePhotoURL(profile.photoUrl);
-      }
+      await _runSaveStep(
+        'saving profile data',
+        () => repo.updateUserProfile(profile),
+      );
+      // FirebaseAuth profile updates are skipped; Firestore is the source of truth.
 
       ref.invalidate(currentUserProfileProvider);
       ref.invalidate(userProfileProvider(session.userId));
     } catch (e) {
-      setState(() => _errorText = 'Unable to save your profile.');
+      final message = _describeSaveError(e);
+      debugPrint('Profile setup failed: $e');
+      setState(() => _errorText = message);
     } finally {
       if (mounted) {
         setState(() => _isSaving = false);
@@ -98,6 +99,36 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     }
   }
 
+  Future<void> _runSaveStep(
+    String label,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } catch (e) {
+      throw _ProfileSaveException(label, e);
+    }
+  }
+
+  String _describeSaveError(Object error) {
+    if (error is _ProfileSaveException) {
+      final details = _describeSaveError(error.error);
+      return 'Unable to save your profile while ${error.step}. $details';
+    }
+    if (error is FirebaseAuthException) {
+      final details = error.message?.trim();
+      return details == null || details.isEmpty
+          ? 'Unable to save your profile.'
+          : 'Unable to save your profile. $details';
+    }
+    if (error is FirebaseException) {
+      final details = error.message?.trim();
+      return details == null || details.isEmpty
+          ? 'Unable to save your profile.'
+          : 'Unable to save your profile. $details';
+    }
+    return 'Unable to save your profile. ${error.toString()}';
+  }
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(authSessionProvider).value;
@@ -113,7 +144,8 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     }
 
     if (!_initialized && session != null) {
-      _nameController.text = profile?.displayName ?? '';
+        _nameController.text =
+          profile?.displayName ?? session.displayName;
       _initialized = true;
     }
 
@@ -215,6 +247,16 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
       ),
     );
   }
+}
+
+class _ProfileSaveException implements Exception {
+  final String step;
+  final Object error;
+
+  const _ProfileSaveException(this.step, this.error);
+
+  @override
+  String toString() => 'Profile save failed while $step: $error';
 }
 
 String _initials(String name) {

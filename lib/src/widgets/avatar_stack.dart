@@ -10,7 +10,10 @@ class AvatarStack extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final visible = initials.take(4).toList();
+    final count = visible.length;
+    final width = count == 0 ? 0.0 : (radius * 2) + (radius * 1.2 * (count - 1));
     return SizedBox(
+      width: width,
       height: radius * 2,
       child: Stack(
         children: [

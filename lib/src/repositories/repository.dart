@@ -184,14 +184,19 @@ class UserProfile {
 
   /// Convert to Firestore document map.
   Map<String, dynamic> toFirestore() {
-    return {
+    final data = <String, dynamic>{
       'userId': userId,
       'displayName': displayName,
-      'email': email,
-      'photoUrl': photoUrl,
-      'createdAt': createdAt.toIso8601String(),
-      'updatedAt': updatedAt.toIso8601String(),
+      'createdAt': Timestamp.fromDate(createdAt),
+      'updatedAt': Timestamp.fromDate(updatedAt),
     };
+    if (email != null) {
+      data['email'] = email;
+    }
+    if (photoUrl != null) {
+      data['photoUrl'] = photoUrl;
+    }
+    return data;
   }
 
   /// Create from Firestore document map.

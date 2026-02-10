@@ -8,10 +8,8 @@ import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/features/auth/screens/auth_flow.dart';
 import 'package:flutter_application_trial/src/features/home/screens/home_shell.dart';
 import 'package:flutter_application_trial/src/features/invites/screens/invite_join_screen.dart';
-import 'package:flutter_application_trial/src/features/profile/screens/profile_setup_screen.dart';
 import 'package:flutter_application_trial/src/app_theme.dart';
 import 'package:flutter_application_trial/src/widgets/app_scaffold.dart';
-import 'package:flutter_application_trial/src/utils/profile_utils.dart';
 import 'package:flutter_application_trial/src/utils/async_guard.dart';
 import 'package:flutter_application_trial/src/utils/invite_utils.dart';
 
@@ -109,11 +107,6 @@ class _AuthGateState extends ConsumerState<AuthGate> {
         }
         return profileAsync.when(
           data: (profile) {
-            final isComplete = profile != null &&
-                isValidDisplayName(profile.displayName);
-            if (!isComplete) {
-              return const ProfileSetupScreen();
-            }
             if (pendingInviteToken != null &&
                 pendingInviteToken != _lastInviteToken) {
               _lastInviteToken = pendingInviteToken;

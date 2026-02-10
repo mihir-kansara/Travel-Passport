@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_application_trial/src/models/auth.dart';
 import 'package:flutter_application_trial/src/providers.dart';
 import 'package:flutter_application_trial/src/repositories/repository.dart';
@@ -340,18 +341,18 @@ class _ProfileEditorState extends ConsumerState<_ProfileEditor> {
         updatedAt: now,
       );
 
-      await repo.updateUserProfile(profile);
-      await FirebaseAuth.instance.currentUser
-          ?.updateDisplayName(profile.displayName);
-      if (profile.photoUrl != null) {
-        await FirebaseAuth.instance.currentUser
-            ?.updatePhotoURL(profile.photoUrl);
-      }
+      await _runSaveStep(
+        'saving profile data',
+        () => repo.updateUserProfile(profile),
+      );
+      // FirebaseAuth profile updates are skipped; Firestore is the source of truth.
 
       ref.invalidate(currentUserProfileProvider);
       ref.invalidate(userProfileProvider(widget.session.userId));
     } catch (e) {
-      setState(() => _errorText = 'Unable to update profile.');
+      final message = _describeSaveError(e);
+      debugPrint('Profile update failed: $e');
+      setState(() => _errorText = message);
     } finally {
       if (mounted) {
         setState(() => _isSaving = false);
@@ -359,6 +360,36 @@ class _ProfileEditorState extends ConsumerState<_ProfileEditor> {
     }
   }
 
+  Future<void> _runSaveStep(
+    String label,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } catch (e) {
+      throw _ProfileSaveException(label, e);
+    }
+  }
+
+  String _describeSaveError(Object error) {
+    if (error is _ProfileSaveException) {
+      final details = _describeSaveError(error.error);
+      return 'Unable to update profile while ${error.step}. $details';
+    }
+    if (error is FirebaseAuthException) {
+      final details = error.message?.trim();
+      return details == null || details.isEmpty
+          ? 'Unable to update profile.'
+          : 'Unable to update profile. $details';
+    }
+    if (error is FirebaseException) {
+      final details = error.message?.trim();
+      return details == null || details.isEmpty
+          ? 'Unable to update profile.'
+          : 'Unable to update profile. $details';
+    }
+    return 'Unable to update profile. ${error.toString()}';
+  }
   @override
   Widget build(BuildContext context) {
     final displayName = widget.profile?.displayName.isNotEmpty == true
@@ -463,6 +494,16 @@ class _ProfileEditorState extends ConsumerState<_ProfileEditor> {
       ),
     );
   }
+}
+
+class _ProfileSaveException implements Exception {
+  final String step;
+  final Object error;
+
+  const _ProfileSaveException(this.step, this.error);
+
+  @override
+  String toString() => 'Profile save failed while $step: $error';
 }
 
 class _SettingsSection extends StatelessWidget {

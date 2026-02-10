@@ -3,7 +3,10 @@ bool isValidDisplayName(String value) {
   if (trimmed.length < 2 || trimmed.length > 30) {
     return false;
   }
-  final pattern = RegExp(r"^[A-Za-z0-9 ._\-\u2019']+$");
+  final pattern = RegExp(
+    r"^[\p{L}\p{M}0-9 ._\-\u2019']+$",
+    unicode: true,
+  );
   return pattern.hasMatch(trimmed);
 }
 
@@ -15,7 +18,10 @@ String? displayNameError(String value) {
   if (trimmed.length < 2 || trimmed.length > 30) {
     return 'Display name must be 2-30 characters.';
   }
-  final pattern = RegExp(r"^[A-Za-z0-9 ._\-\u2019']+$");
+  final pattern = RegExp(
+    r"^[\p{L}\p{M}0-9 ._\-\u2019']+$",
+    unicode: true,
+  );
   if (!pattern.hasMatch(trimmed)) {
     return 'Use letters, numbers, spaces, . _ - or apostrophes.';
   }
